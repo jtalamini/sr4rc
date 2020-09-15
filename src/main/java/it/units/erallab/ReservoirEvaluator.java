@@ -33,8 +33,10 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
 
     public List<Double> apply(Robot<?> robot, SnapshotListener listener) {
 
-        List<Double> previousAreas = null;
-        int[] avalanchedVoxels = new int[robot.getVoxels().getW()*robot.getVoxels().getH()];
+        int voxelGridSize = robot.getVoxels().getW()*robot.getVoxels().getH();
+        Object[] voxelsPreviousArea = null;
+        Object[] voxelsCurrentArea;
+        int[] avalanchedVoxels = new int[voxelGridSize];
         int avalanchesTemporalExtension = 0;
         int avalanchesSpatialExtension;
 
@@ -66,28 +68,29 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
             world.step(1);
             robot.act(t);
             // self-organized criticality
-            // 1. count how many voxels have changed shape since last step
-            // 2. count how long this process occurs
-            List<Double> currentAreas = robot.getVoxels().values().stream()
+            voxelsCurrentArea = robot.getVoxels().values().stream()
                     .filter(Objects::nonNull)
                     .map(it.units.erallab.hmsrobots.core.objects.Voxel::getAreaRatio)
-                    .collect(Collectors.toList());
+                    .collect(Collectors.toList()).toArray();
 
-            List<Double> finalPreviousAreas = previousAreas;
-            if (previousAreas != null) {
-                int[] activeVoxelsIndex = IntStream.range(0, previousAreas.size())
-                        .filter(i -> Math.abs(finalPreviousAreas.get(i) - currentAreas.get(i)) > threshold)
+            if (voxelsPreviousArea != null) {
+                Object[] finalPreviousAreas = voxelsPreviousArea;
+                Object[] finalCurrentAreas = voxelsCurrentArea;
+                int[] activeVoxelsIndex = IntStream.range(0, voxelsPreviousArea.length)
+                        .filter(i -> Math.abs((double) finalPreviousAreas[i] - (double) finalCurrentAreas[i]) > threshold)
                         .toArray();
 
                 if (activeVoxelsIndex.length == 0) {
                     break;
                 } else {
                     avalanchesTemporalExtension += 1;
-                    //  here compute the avalanche spatial extension
-                    Arrays.stream(activeVoxelsIndex).forEach(i -> avalanchedVoxels[i] = 1);
+                    // avalanche spatial extension
+                    Arrays.stream(activeVoxelsIndex)
+                            .filter(i -> avalanchedVoxels[i] == 0)
+                            .forEach(i -> avalanchedVoxels[i] = 1);
                 }
             }
-            previousAreas = currentAreas;
+            voxelsPreviousArea = voxelsCurrentArea;
 
             // this saves the robot info during the simulation
             if (listener != null) {
