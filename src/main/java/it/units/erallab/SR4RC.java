@@ -1,12 +1,18 @@
 package it.units.erallab;
 
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import it.units.erallab.hmsrobots.core.controllers.Controller;
 import it.units.erallab.hmsrobots.core.controllers.TimeFunctions;
 import it.units.erallab.hmsrobots.core.objects.ControllableVoxel;
 import it.units.erallab.hmsrobots.core.objects.Robot;
+import it.units.erallab.hmsrobots.core.objects.Voxel;
 import it.units.erallab.hmsrobots.util.Grid;
+import it.units.erallab.hmsrobots.util.Point2;
 import it.units.erallab.hmsrobots.util.Utils;
+import it.units.erallab.hmsrobots.viewers.GraphicsDrawer;
+import it.units.erallab.hmsrobots.viewers.GridEpisodeRunner;
+import it.units.erallab.hmsrobots.viewers.GridOnlineViewer;
 import it.units.malelab.jgea.Worker;
 import it.units.malelab.jgea.core.Individual;
 import it.units.malelab.jgea.core.Problem;
@@ -26,9 +32,14 @@ import it.units.malelab.jgea.representation.sequence.bit.BitFlipMutation;
 import it.units.malelab.jgea.representation.sequence.bit.BitString;
 import it.units.malelab.jgea.representation.sequence.bit.BitStringFactory;
 import org.apache.commons.lang3.SerializationUtils;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.commons.math3.stat.inference.KolmogorovSmirnovTest;
 import org.dyn4j.dynamics.Settings;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -40,12 +51,75 @@ public class SR4RC extends Worker {
     }
 
     public static void main(String[] args) {
-        new SR4RC(args);
+
+        Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(5, 5, (x, y) -> (Double t) -> {
+            if ((t < 0.05) && (x * 5 + y == 0)) {
+                return 1.0;
+            } else {
+                return 0.0;
+            }
+        }));
+
+        ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
+                20, // task duration
+                ReservoirEvaluator.createTerrain("flat"),
+                new Settings() // default settings for the physics engine
+        );
+
+        // voxel made of the soft material
+        final ControllableVoxel softMaterial = new ControllableVoxel(
+                Voxel.SIDE_LENGTH,
+                Voxel.MASS_SIDE_LENGTH_RATIO,
+                5d, // low frequency
+                Voxel.SPRING_D,
+                Voxel.MASS_LINEAR_DAMPING,
+                Voxel.MASS_ANGULAR_DAMPING,
+                Voxel.FRICTION,
+                Voxel.RESTITUTION,
+                Voxel.MASS,
+                Voxel.LIMIT_CONTRACTION_FLAG,
+                Voxel.MASS_COLLISION_FLAG,
+                Voxel.AREA_RATIO_MAX_DELTA,
+                EnumSet.of(Voxel.SpringScaffolding.SIDE_EXTERNAL, Voxel.SpringScaffolding.CENTRAL_CROSS), // scaffolding partially enabled
+                ControllableVoxel.MAX_FORCE,
+                ControllableVoxel.ForceMethod.DISTANCE
+        );
+
+        Grid<ControllableVoxel> body = Grid.create(5,5, (x,y) -> SerializationUtils.clone(softMaterial));
+
+        Robot<ControllableVoxel> robot = new Robot<>(pulseController, body);
+
+        ScheduledExecutorService uiExecutor = Executors.newScheduledThreadPool(2);
+        ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        // configure the viewer
+        GridOnlineViewer gridOnlineViewer = new GridOnlineViewer(
+                Grid.create(1, 1, "Simulation"),
+                uiExecutor,
+                GraphicsDrawer.build().setConfigurable("drawers", List.of(
+                        it.units.erallab.hmsrobots.viewers.drawers.Robot.build(),
+                        it.units.erallab.hmsrobots.viewers.drawers.Voxel.build(),
+                        it.units.erallab.hmsrobots.viewers.drawers.Ground.build()
+                ))
+        );
+        // set the delay from the simulation to the viewer
+        gridOnlineViewer.start(0);
+        // run the simulations
+        GridEpisodeRunner<Robot<?>> runner = new GridEpisodeRunner<>(
+                Grid.create(1, 1, Pair.of("Robot", robot)),
+                reservoirEvaluator,
+                gridOnlineViewer,
+                executor
+        );
+        runner.run();
+
+        //new SR4RC(args);
+
+
+
     }
 
     @Override
     public void run() {
-
         // parameters
         int width = 5;
         int height = 5;
@@ -61,7 +135,6 @@ public class SR4RC extends Worker {
         ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
                 finalT, // task duration
                 ReservoirEvaluator.createTerrain("flat"),
-                Lists.newArrayList(ReservoirEvaluator.Metric.SELF_ORGANIZED_CRITICALITY),
                 new Settings() // default settings for the physics engine
         );
 
@@ -80,28 +153,61 @@ public class SR4RC extends Worker {
                 List<Double> metrics = reservoirEvaluator.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
                 avalanches.add(metrics.get(0));
             });
-            // here create the avalanches distribution and measure distance from self-organized criticality slope
+            // here create the avalanches distribution and measure distance from self-organized criticality
             Map<Double, Long> avalanchesDistribution = avalanches.stream()
                     .collect(Collectors.groupingBy(avalanche -> avalanche, Collectors.counting()));
 
-            // the distribution should fit a symmetric line with slope -1
-            // optimally: y + x = 0
-
-            double distanceFromCriticality = avalanchesDistribution.entrySet().stream()
-                    .map(entry -> Math.pow(Math.log(entry.getValue()) + Math.log(entry.getKey()), 2))
+            // the distribution should fit a powerlaw distribution
+            // 1. linear regression of the log-log distribution
+            List<Point2> logLogData = avalanchesDistribution.entrySet().stream()
+                    .map(entry -> Point2.build(Math.log(entry.getValue()), Math.log(entry.getKey())))
+                    .collect(Collectors.toList());
+            LinearRegression lr = new LinearRegression(logLogData);
+            double determinationCoefficient = lr.R2();
+            // 2. bins ????
+            /*
+            double max = avalanchesDistribution.entrySet().stream()
                     .mapToDouble(Double::doubleValue)
-                    .sum();
-            return distanceFromCriticality;
+                    .max();
+            double average = avalanchesDistribution.entrySet().stream()
+                    .mapToDouble(Double::doubleValue)
+                    .average();
+            double binsCoefficient = Math.tanh(5 * (0.9 * max) + 0.1 * average);
+             */
+            // 3. KS statistics
+            KolmogorovSmirnovTest ks = new KolmogorovSmirnovTest();
+            double[] fitArray = new double[logLogData.size()];
+            double[] realArray = new double[logLogData.size()];
+            int index = 0;
+            for (Point2 point : logLogData) {
+                fitArray[index] = lr.predict(point.x);
+                realArray[index] = point.x;
+                index ++;
+            }
+            double kolmogorovSmirnovStatistic = ks.kolmogorovSmirnovStatistic(fitArray, realArray);
+            double ksStatisticsCoefficient = Math.exp(-(0.9 * kolmogorovSmirnovStatistic + 0.1 * kolmogorovSmirnovStatistic));
+            // 4. unique states
+
+            // 5. log likelihood
+
+            return determinationCoefficient + kolmogorovSmirnovStatistic;
+
         };
 
         // mapper
-        Function<BitString, Grid<ControllableVoxel>> mapper = g -> Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? new ControllableVoxel() : null), Objects::nonNull);
+        //Function<BitString, Grid<ControllableVoxel>> mapper = g -> Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? new ControllableVoxel() : null), Objects::nonNull);
+        Function<BitString, Grid<ControllableVoxel>> mapper = g -> {
+            if (g.asBitSet().stream().sum() == 0) {
+                g.set(0, true);
+            }
+            return Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? new ControllableVoxel() : null), Objects::nonNull);
+        };
 
         // evolver
         Evolver<BitString, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
                 mapper,
                 new BitStringFactory(width * height), // w x h
-                PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
+                PartialComparator.from(Double.class).comparing(Individual::getFitness), // fitness comparator
                 populationSize, // pop size
                 Map.of(
                         new BitFlipMutation(mutationProb), 0.2d,
