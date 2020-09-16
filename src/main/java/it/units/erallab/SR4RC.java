@@ -51,13 +51,16 @@ public class SR4RC extends Worker {
     }
 
     public static void main(String[] args) {
-
+        /*
         Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(5, 5, (x, y) -> (Double t) -> {
-            if ((t < 0.05) && (x * 5 + y == 0)) {
-                return 1.0;
-            } else {
-                return 0.0;
+            if (x * 5 + y == 0) {
+                if (t < 0.2) {
+                    return 1.0;
+                } else if (t < 0.4) {
+                    return -1.0;
+                }
             }
+        return 0.0;
         }));
 
         ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
@@ -112,10 +115,25 @@ public class SR4RC extends Worker {
         );
         runner.run();
 
-        //new SR4RC(args);
+
+         */
+        new SR4RC(args);
 
 
 
+    }
+
+    private double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
+        KolmogorovSmirnovTest ks = new KolmogorovSmirnovTest();
+        double[] fitArray = new double[empiricalDistribution.size()];
+        double[] realArray = new double[empiricalDistribution.size()];
+        int index = 0;
+        for (Point2 point : empiricalDistribution) {
+            fitArray[index] = linearRegression.predict(point.x);
+            realArray[index] = point.y;
+            index ++;
+        }
+        return ks.kolmogorovSmirnovStatistic(fitArray, realArray);
     }
 
     @Override
@@ -130,12 +148,15 @@ public class SR4RC extends Worker {
         int iterations = 100;
         int randomSeed = 0;
         double finalT = 10;
+        double pulseDuration = 0.4;
+        double avalancheDetectionThreshold = 0.001;
 
         // task
         ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
                 finalT, // task duration
                 ReservoirEvaluator.createTerrain("flat"),
-                new Settings() // default settings for the physics engine
+                new Settings(), // default settings for the physics engine
+                avalancheDetectionThreshold
         );
 
         // voxel made of the soft material
@@ -164,32 +185,41 @@ public class SR4RC extends Worker {
             // a pulse controller is applied on each voxel
             IntStream.range(0, width * height).forEach(i -> {
                 Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(width, height, (x, y) -> (Double t) -> {
-                    if ((t < 0.05) && (x * height + y == i)) {
-                        return 1.0;
-                    } else {
-                        return 0.0;
+                    if (x * height + y == i) {
+                        if (t < pulseDuration/2) {
+                            return 1.0;
+                        } else if (t < pulseDuration) {
+                            return -1.0;
+                        }
                     }
+                    return 0.0;
                 }));
                 List<Double> metrics = reservoirEvaluator.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
                 avalanchesSpatialExtension.add(metrics.get(0));
                 avalanchesTemporalExtension.add(metrics.get(1));
             });
-            // here create the avalanches distribution and measure distance from self-organized criticality
-            Map<Double, Long> avalanchesSpatialExtensionDistribution = avalanchesSpatialExtension.stream()
-                    .collect(Collectors.groupingBy(avalanche -> avalanche, Collectors.counting()));
 
-            Map<Double, Long> avalanchesTemporalExtensionDistribution = avalanchesTemporalExtension.stream()
-                    .collect(Collectors.groupingBy(avalanche -> avalanche, Collectors.counting()));
+            List<Point2> logLogSpatialDistribution = avalanchesSpatialExtension.stream()
+                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))))
+                    .collect(Collectors.toList());
+
+            List<Point2> logLogTemporalDistribution = avalanchesTemporalExtension.stream()
+                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))))
+                    .collect(Collectors.toList());
+
+            //tfitness := how well the empirical distribution fit a powerlaw distribution
+
+            // linear regression of the log-log distribution
+            LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
+            LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
+
+            double spatialRSquared = spatialLinearRegression.R2();
+            double temporalRSquared = temporalLinearRegression.R2();
+
+            double RSquared = (spatialRSquared + temporalRSquared)/2;
 
             //TODO from here fitness computation
-            
-            // the distribution should fit a powerlaw distribution
-            // 1. linear regression of the log-log distribution
-            List<Point2> logLogData = avalanchesSpatialExtensionDistribution.entrySet().stream()
-                    .map(entry -> Point2.build(Math.log(entry.getValue()), Math.log(entry.getKey())))
-                    .collect(Collectors.toList());
-            LinearRegression lr = new LinearRegression(logLogData);
-            double determinationCoefficient = lr.R2();
+
             // 2. bins ????
             /*
             double max = avalanchesDistribution.entrySet().stream()
@@ -201,22 +231,15 @@ public class SR4RC extends Worker {
             double binsCoefficient = Math.tanh(5 * (0.9 * max) + 0.1 * average);
              */
             // 3. KS statistics
-            KolmogorovSmirnovTest ks = new KolmogorovSmirnovTest();
-            double[] fitArray = new double[logLogData.size()];
-            double[] realArray = new double[logLogData.size()];
-            int index = 0;
-            for (Point2 point : logLogData) {
-                fitArray[index] = lr.predict(point.x);
-                realArray[index] = point.x;
-                index ++;
-            }
-            double kolmogorovSmirnovStatistic = ks.kolmogorovSmirnovStatistic(fitArray, realArray);
-            double ksStatisticsCoefficient = Math.exp(-(0.9 * kolmogorovSmirnovStatistic + 0.1 * kolmogorovSmirnovStatistic));
+            double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
+            double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
+            double D = Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2));
+
             // 4. unique states
 
             // 5. log likelihood
 
-            return determinationCoefficient + kolmogorovSmirnovStatistic;
+            return RSquared + D;
 
         };
 

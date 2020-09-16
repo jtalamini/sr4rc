@@ -22,13 +22,13 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
     private final double initialPlacement;
     private double threshold;
 
-    public ReservoirEvaluator(double finalT, double[][] groundProfile, Settings settings) {
+    public ReservoirEvaluator(double finalT, double[][] groundProfile, Settings settings, double threshold) {
         super(settings);
-        // gravità o misurare transitorio?
         this.finalT = finalT;
         this.groundProfile = groundProfile;
         this.initialPlacement = groundProfile[0][1] + 1.0D;
-        this.threshold = 0.00001d;
+        //this.threshold = 0.00001d;
+        this.threshold = threshold;
     }
 
     public List<Double> apply(Robot<?> robot, SnapshotListener listener) {
@@ -41,16 +41,20 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
         int avalanchesSpatialExtension;
 
         World world = new World();
+        // disable gravity
+        world.setGravity(new Vector2(0d, 0d));
+
         world.setSettings(this.settings);
         List<WorldObject> worldObjects = new ArrayList();
-        Ground ground = new Ground(this.groundProfile[0], this.groundProfile[1]);
-        ground.addTo(world);
-        worldObjects.add(ground);
+        //Ground ground = new Ground(this.groundProfile[0], this.groundProfile[1]);
+        //ground.addTo(world);
+        //worldObjects.add(ground);
 
         BoundingBox boundingBox = robot.boundingBox();
 
         robot.translate(new Vector2(this.initialPlacement - boundingBox.min.x, 0.0D));
 
+        /*
         double minYGap = robot.getVoxels().values().stream()
                 .filter(Objects::nonNull)
                 .mapToDouble((v) -> ((Voxel) v.immutable()).getShape().boundingBox().min.y - ground.yAt(v.getCenter().x))
@@ -58,6 +62,8 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
                 .orElse(0.0D);
 
         robot.translate(new Vector2(0.0D, 1.0D - minYGap));
+
+         */
 
         robot.addTo(world);
         worldObjects.add(robot);
@@ -67,6 +73,7 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
             t += this.settings.getStepFrequency();
             world.step(1);
             robot.act(t);
+
             // self-organized criticality
             voxelsCurrentArea = robot.getVoxels().values().stream()
                     .filter(Objects::nonNull)
