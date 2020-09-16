@@ -51,7 +51,9 @@ public class SR4RC extends Worker {
     }
 
     public static void main(String[] args) {
+
         /*
+
         Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(5, 5, (x, y) -> (Double t) -> {
             if (x * 5 + y == 0) {
                 if (t < 0.2) {
@@ -66,7 +68,8 @@ public class SR4RC extends Worker {
         ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
                 20, // task duration
                 ReservoirEvaluator.createTerrain("flat"),
-                new Settings() // default settings for the physics engine
+                new Settings(), // default settings for the physics engine
+                0.0005
         );
 
         // voxel made of the soft material
@@ -114,13 +117,9 @@ public class SR4RC extends Worker {
                 executor
         );
         runner.run();
-
-
          */
+
         new SR4RC(args);
-
-
-
     }
 
     private double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
@@ -139,8 +138,8 @@ public class SR4RC extends Worker {
     @Override
     public void run() {
         // parameters
-        int width = 5;
-        int height = 5;
+        int width = 10;
+        int height = 10;
         int populationSize = 500;
         double mutationProb = 0.01;
         int tournamentSize = 10;
@@ -149,14 +148,16 @@ public class SR4RC extends Worker {
         int randomSeed = 0;
         double finalT = 10;
         double pulseDuration = 0.4;
-        double avalancheDetectionThreshold = 0.001;
+        double avalancheDetectionThreshold = 0.0002;
+        int binSize = 10;
 
         // task
         ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
                 finalT, // task duration
                 ReservoirEvaluator.createTerrain("flat"),
                 new Settings(), // default settings for the physics engine
-                avalancheDetectionThreshold
+                avalancheDetectionThreshold,
+                binSize
         );
 
         // voxel made of the soft material
@@ -180,8 +181,11 @@ public class SR4RC extends Worker {
 
         // problem
         Problem<Grid<ControllableVoxel>, Double> problem = () -> body -> {
-            List<Double> avalanchesSpatialExtension = new ArrayList<>();
-            List<Double> avalanchesTemporalExtension = new ArrayList<>();
+            if (body == null) {
+                return 0.0;
+            }
+            List<Integer> avalanchesSpatialExtension = new ArrayList<>();
+            List<Integer> avalanchesTemporalExtension = new ArrayList<>();
             // a pulse controller is applied on each voxel
             IntStream.range(0, width * height).forEach(i -> {
                 Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(width, height, (x, y) -> (Double t) -> {
@@ -195,28 +199,33 @@ public class SR4RC extends Worker {
                     return 0.0;
                 }));
                 List<Double> metrics = reservoirEvaluator.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
-                avalanchesSpatialExtension.add(metrics.get(0));
-                avalanchesTemporalExtension.add(metrics.get(1));
+
+                if (metrics.get(0) > 0) {
+                    avalanchesSpatialExtension.add(metrics.get(0).intValue());
+                }
+                if (metrics.get(1) > 0) {
+                    avalanchesTemporalExtension.add(metrics.get(1).intValue());
+                }
             });
 
             List<Point2> logLogSpatialDistribution = avalanchesSpatialExtension.stream()
+                    .distinct()
                     .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))))
                     .collect(Collectors.toList());
 
             List<Point2> logLogTemporalDistribution = avalanchesTemporalExtension.stream()
+                    .distinct()
                     .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))))
                     .collect(Collectors.toList());
 
-            //tfitness := how well the empirical distribution fit a powerlaw distribution
+            //fitness := how well the empirical distribution fit a powerlaw distribution
 
             // linear regression of the log-log distribution
+
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
 
-            double spatialRSquared = spatialLinearRegression.R2();
-            double temporalRSquared = temporalLinearRegression.R2();
-
-            double RSquared = (spatialRSquared + temporalRSquared)/2;
+            double RSquared = (spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
 
             //TODO from here fitness computation
 
@@ -231,6 +240,7 @@ public class SR4RC extends Worker {
             double binsCoefficient = Math.tanh(5 * (0.9 * max) + 0.1 * average);
              */
             // 3. KS statistics
+
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
             double D = Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2));
@@ -240,14 +250,13 @@ public class SR4RC extends Worker {
             // 5. log likelihood
 
             return RSquared + D;
-
         };
 
         // mapper
         //Function<BitString, Grid<ControllableVoxel>> mapper = g -> Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? new ControllableVoxel() : null), Objects::nonNull);
         Function<BitString, Grid<ControllableVoxel>> mapper = g -> {
             if (g.asBitSet().stream().sum() == 0) {
-                g.set(0, true);
+                return null;
             }
             return Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
         };
@@ -256,7 +265,7 @@ public class SR4RC extends Worker {
         Evolver<BitString, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
                 mapper,
                 new BitStringFactory(width * height), // w x h
-                PartialComparator.from(Double.class).comparing(Individual::getFitness), // fitness comparator
+                PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
                 populationSize, // pop size
                 Map.of(
                         new BitFlipMutation(mutationProb), 0.2d,

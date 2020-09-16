@@ -13,41 +13,52 @@ public class LinearRegression {
 
     public LinearRegression(List<Point2> data) {
         int n = data.size();
-        // first pass
-        double sumx = 0.0, sumy = 0.0, sumx2 = 0.0;
-        for (Point2 point : data) {
-            sumx  += point.x;
-            sumx2 += point.x*point.x;
-            sumy  += point.y;
-        }
-        double xbar = sumx / n;
-        double ybar = sumy / n;
+        if (n < 2) {
+            this.r2 = 0;
+            this.slope = 0;
+            this.intercept = 0;
+            this.residualSumSquared = 0;
+            this.svar0 = 0;
+            this.svar1 = 0;
+        } else {
+            // first pass
+            double sumx = 0.0, sumy = 0.0, sumx2 = 0.0;
+            for (Point2 point : data) {
+                sumx  += point.x;
+                sumx2 += point.x*point.x;
+                sumy  += point.y;
+            }
+            double xbar = sumx / n;
+            double ybar = sumy / n;
 
-        // second pass: compute summary statistics
-        double xxbar = 0.0, yybar = 0.0, xybar = 0.0;
-        for (Point2 point : data) {
-            xxbar += (point.x - xbar) * (point.x - xbar);
-            yybar += (point.y - ybar) * (point.y - ybar);
-            xybar += (point.x - xbar) * (point.y - ybar);
-        }
-        slope  = xybar / xxbar;
-        intercept = ybar - slope * xbar;
+            // second pass: compute summary statistics
+            double xxbar = 0.0, yybar = 0.0, xybar = 0.0;
+            for (Point2 point : data) {
+                xxbar += (point.x - xbar) * (point.x - xbar);
+                yybar += (point.y - ybar) * (point.y - ybar);
+                xybar += (point.x - xbar) * (point.y - ybar);
+            }
 
-        // more statistical analysis
-        double rss = 0.0;      // residual sum of squares
-        double ssr = 0.0;      // regression sum of squares
-        for (Point2 point : data) {
-            double fit = slope*point.x + intercept;
-            rss += (fit - point.y) * (fit - point.y);
-            ssr += (fit - ybar) * (fit - ybar);
-        }
-        residualSumSquared = rss;
+            slope  = xybar / xxbar;
 
-        int degreesOfFreedom = n-2;
-        r2    = ssr / yybar;
-        double svar  = rss / degreesOfFreedom;
-        svar1 = svar / xxbar;
-        svar0 = svar/n + xbar*xbar*svar1;
+            intercept = ybar - slope * xbar;
+
+            // more statistical analysis
+            double rss = 0.0;      // residual sum of squares
+            double ssr = 0.0;      // regression sum of squares
+            for (Point2 point : data) {
+                double fit = slope*point.x + intercept;
+                rss += (fit - point.y) * (fit - point.y);
+                ssr += (fit - ybar) * (fit - ybar);
+            }
+            residualSumSquared = rss;
+
+            int degreesOfFreedom = n-2;
+            r2    = ssr / yybar;
+            double svar  = rss / degreesOfFreedom;
+            svar1 = svar / xxbar;
+            svar0 = svar/n + xbar*xbar*svar1;
+        }
     }
 
     public double intercept() {

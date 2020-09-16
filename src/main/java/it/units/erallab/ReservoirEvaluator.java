@@ -1,13 +1,10 @@
 package it.units.erallab;
 
-import it.units.erallab.hmsrobots.core.objects.Ground;
 import it.units.erallab.hmsrobots.core.objects.Robot;
 import it.units.erallab.hmsrobots.core.objects.WorldObject;
 import it.units.erallab.hmsrobots.core.objects.immutable.Snapshot;
-import it.units.erallab.hmsrobots.core.objects.immutable.Voxel;
 import it.units.erallab.hmsrobots.tasks.AbstractTask;
 import it.units.erallab.hmsrobots.util.BoundingBox;
-import it.units.erallab.hmsrobots.util.Point2;
 import it.units.erallab.hmsrobots.viewers.SnapshotListener;
 import org.dyn4j.dynamics.Settings;
 import org.dyn4j.dynamics.World;
@@ -21,14 +18,16 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
     private final double[][] groundProfile;
     private final double initialPlacement;
     private double threshold;
+    private int binSize;
 
-    public ReservoirEvaluator(double finalT, double[][] groundProfile, Settings settings, double threshold) {
+    public ReservoirEvaluator(double finalT, double[][] groundProfile, Settings settings, double threshold, int binSize) {
         super(settings);
         this.finalT = finalT;
         this.groundProfile = groundProfile;
         this.initialPlacement = groundProfile[0][1] + 1.0D;
         //this.threshold = 0.00001d;
         this.threshold = threshold;
+        this.binSize = binSize;
     }
 
     public List<Double> apply(Robot<?> robot, SnapshotListener listener) {
@@ -107,11 +106,11 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
         }
         avalanchesSpatialExtension = Arrays.stream(avalanchedVoxels).sum();
 
-        List results = new ArrayList();
-        results.add(avalanchesSpatialExtension);
-        results.add(avalanchesTemporalExtension);
-        System.out.println("Spatial extension: "+avalanchesSpatialExtension);
-        System.out.println("Temporal extension: "+avalanchesTemporalExtension);
+        List<Double> results = new ArrayList();
+        results.add((double)avalanchesSpatialExtension);
+        results.add((double)(avalanchesTemporalExtension/binSize + 1));
+        //System.out.println("Spatial extension: "+avalanchesSpatialExtension);
+        //System.out.println("Temporal extension: "+avalanchesTemporalExtension);
         return results;
     }
 
