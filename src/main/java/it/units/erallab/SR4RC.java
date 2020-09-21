@@ -35,6 +35,8 @@ import org.apache.commons.lang3.SerializationUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.math3.stat.inference.KolmogorovSmirnovTest;
 import org.dyn4j.dynamics.Settings;
+
+import javax.naming.ldap.Control;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -138,9 +140,11 @@ public class SR4RC extends Worker {
     @Override
     public void run() {
         // parameters
-        int width = 10;
-        int height = 10;
-        int populationSize = 500;
+        int width = 20;
+        int height = 20;
+        int nGaussian = 10;
+        double gaussianThreshold = 0.5;
+        int populationSize = 100;
         double mutationProb = 0.01;
         int tournamentSize = 10;
         int cacheSize = 10000;
@@ -210,18 +214,26 @@ public class SR4RC extends Worker {
 
             List<Point2> logLogSpatialDistribution = avalanchesSpatialExtension.stream()
                     .distinct()
+                    .sorted()
+                    .limit(10)
                     .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))))
                     .collect(Collectors.toList());
 
             List<Point2> logLogTemporalDistribution = avalanchesTemporalExtension.stream()
                     .distinct()
+                    .sorted()
+                    .limit(10)
                     .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))))
                     .collect(Collectors.toList());
 
             //fitness := how well the empirical distribution fit a powerlaw distribution
 
-            // linear regression of the log-log distribution
+            if ((logLogSpatialDistribution.size() < 2) || (logLogTemporalDistribution.size() < 2)) {
+                return 0.0;
+            }
 
+            // linear regression of the log-log distribution
+            // take only the first 10 non-empty bins
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
 
@@ -230,6 +242,9 @@ public class SR4RC extends Worker {
             //TODO from here fitness computation
 
             // 2. bins ????
+            // count the number of bins that are not empty for each distribution
+            // then compute the tanh
+
             /*
             double max = avalanchesDistribution.entrySet().stream()
                     .mapToDouble(Double::doubleValue)
@@ -240,26 +255,61 @@ public class SR4RC extends Worker {
             double binsCoefficient = Math.tanh(5 * (0.9 * max) + 0.1 * average);
              */
             // 3. KS statistics
-
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
             double D = Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2));
 
             // 4. unique states
+            // compute the actractor length
+            // divide the actrator length by the number of possible states (2^number of voxels)
 
             // 5. log likelihood
+            /*
+            if (fitenss > 3.5) {
 
+            }
+             */
+            //System.out.println("R2: "+RSquared+"    D: "+D);
             return RSquared + D;
         };
 
         // mapper
-        //Function<BitString, Grid<ControllableVoxel>> mapper = g -> Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? new ControllableVoxel() : null), Objects::nonNull);
         Function<BitString, Grid<ControllableVoxel>> mapper = g -> {
             if (g.asBitSet().stream().sum() == 0) {
                 return null;
             }
             return Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
         };
+
+        // new mapper
+        /*
+        Function<List<Double>, Grid<ControllableVoxel>> gaussianMapper = g -> {
+            Grid<Double> gaussianGrid = Grid.create(width, height, 0d);
+            int c = 0;
+            for (int j = 0; j < nGaussian; j++) {
+                //extract parameter of the j-th gaussian for the i-th material
+                double muX = g.get(c + 0);
+                double muY = g.get(c + 1);
+                double sigma = Math.max(0d, g.get(c + 2));
+                double weight = g.get(c + 3);
+                c = c + 4;
+                //compute over grid
+                for (int x = 0; x < width; x++) {
+                    for (int y = 0; y < height; y++) {
+                        double d = dist((double) x / (double) width, (double) y / (double) height, muX, muY);
+                        double g = gaussian(d, sigma) * weight;
+                        gaussianGrid.set(x, y, gaussianGrid.get(x, y) + g);
+                    }
+                }
+            }
+            //build grid with material index
+            Grid<ControllableVoxel> body = Grid.create(width, height, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
+            //find largest connected and crop
+            body = Utils.gridLargestConnected(body, i -> i != null);
+            body = Utils.cropGrid(body, i -> i != null);
+            return body;
+        };
+         */
 
         // evolver
         Evolver<BitString, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
