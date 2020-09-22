@@ -109,8 +109,8 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
         List<Double> results = new ArrayList();
         results.add((double)avalanchesSpatialExtension);
         results.add((double)(avalanchesTemporalExtension/binSize + 1));
-        //System.out.println("Spatial extension: "+avalanchesSpatialExtension);
-        //System.out.println("Temporal extension: "+avalanchesTemporalExtension);
+        // System.out.println("Spatial extension: "+avalanchesSpatialExtension);
+        // System.out.println("Temporal extension: "+avalanchesTemporalExtension);
         return results;
     }
 

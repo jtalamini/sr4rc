@@ -1,12 +1,12 @@
 package it.units.erallab;
 
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import it.units.erallab.hmsrobots.core.controllers.Controller;
 import it.units.erallab.hmsrobots.core.controllers.TimeFunctions;
 import it.units.erallab.hmsrobots.core.objects.ControllableVoxel;
 import it.units.erallab.hmsrobots.core.objects.Robot;
 import it.units.erallab.hmsrobots.core.objects.Voxel;
+import it.units.erallab.hmsrobots.tasks.Locomotion;
 import it.units.erallab.hmsrobots.util.Grid;
 import it.units.erallab.hmsrobots.util.Point2;
 import it.units.erallab.hmsrobots.util.Utils;
@@ -19,24 +19,22 @@ import it.units.malelab.jgea.core.Problem;
 import it.units.malelab.jgea.core.evolver.Evolver;
 import it.units.malelab.jgea.core.evolver.StandardEvolver;
 import it.units.malelab.jgea.core.evolver.stopcondition.Iterations;
-import it.units.malelab.jgea.core.listener.collector.Basic;
-import it.units.malelab.jgea.core.listener.collector.BestInfo;
-import it.units.malelab.jgea.core.listener.collector.Diversity;
-import it.units.malelab.jgea.core.listener.collector.Population;
+import it.units.malelab.jgea.core.listener.Listener;
+import it.units.malelab.jgea.core.listener.MultiFileListenerFactory;
+import it.units.malelab.jgea.core.listener.collector.*;
 import it.units.malelab.jgea.core.order.PartialComparator;
 import it.units.malelab.jgea.core.selector.Tournament;
 import it.units.malelab.jgea.core.selector.Worst;
 import it.units.malelab.jgea.core.util.Misc;
+import it.units.malelab.jgea.representation.sequence.FixedLengthListFactory;
 import it.units.malelab.jgea.representation.sequence.UniformCrossover;
-import it.units.malelab.jgea.representation.sequence.bit.BitFlipMutation;
 import it.units.malelab.jgea.representation.sequence.bit.BitString;
-import it.units.malelab.jgea.representation.sequence.bit.BitStringFactory;
+import it.units.malelab.jgea.representation.sequence.numeric.GaussianMutation;
+import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.math3.stat.inference.KolmogorovSmirnovTest;
 import org.dyn4j.dynamics.Settings;
-
-import javax.naming.ldap.Control;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -53,49 +51,26 @@ public class SR4RC extends Worker {
     }
 
     public static void main(String[] args) {
+        new SR4RC(args);
+    }
 
-        /*
+    private void validate(Grid<ControllableVoxel> body) {
+        Controller<ControllableVoxel> testController = new TimeFunctions(Grid.create(
+                body.getW(), body.getH(),
+                (x, y) -> (Double t) -> Math.sin(-2 * Math.PI * t + Math.PI * ((double) x / (double) body.getW()))
+        ));
 
-        Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(5, 5, (x, y) -> (Double t) -> {
-            if (x * 5 + y == 0) {
-                if (t < 0.2) {
-                    return 1.0;
-                } else if (t < 0.4) {
-                    return -1.0;
-                }
-            }
-        return 0.0;
-        }));
-
-        ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
-                20, // task duration
-                ReservoirEvaluator.createTerrain("flat"),
-                new Settings(), // default settings for the physics engine
-                0.0005
+        final Locomotion locomotion = new Locomotion(
+                20,
+                Locomotion.createTerrain("flat"),
+                Lists.newArrayList(
+                        Locomotion.Metric.TRAVEL_X_VELOCITY,
+                        Locomotion.Metric.RELATIVE_CONTROL_POWER
+                ),
+                new Settings()
         );
 
-        // voxel made of the soft material
-        final ControllableVoxel softMaterial = new ControllableVoxel(
-                Voxel.SIDE_LENGTH,
-                Voxel.MASS_SIDE_LENGTH_RATIO,
-                5d, // low frequency
-                Voxel.SPRING_D,
-                Voxel.MASS_LINEAR_DAMPING,
-                Voxel.MASS_ANGULAR_DAMPING,
-                Voxel.FRICTION,
-                Voxel.RESTITUTION,
-                Voxel.MASS,
-                Voxel.LIMIT_CONTRACTION_FLAG,
-                Voxel.MASS_COLLISION_FLAG,
-                Voxel.AREA_RATIO_MAX_DELTA,
-                EnumSet.of(Voxel.SpringScaffolding.SIDE_EXTERNAL, Voxel.SpringScaffolding.CENTRAL_CROSS), // scaffolding partially enabled
-                ControllableVoxel.MAX_FORCE,
-                ControllableVoxel.ForceMethod.DISTANCE
-        );
-
-        Grid<ControllableVoxel> body = Grid.create(5,5, (x,y) -> SerializationUtils.clone(softMaterial));
-
-        Robot<ControllableVoxel> robot = new Robot<>(pulseController, body);
+        Robot<ControllableVoxel> robot = new Robot<>(testController, body);
 
         ScheduledExecutorService uiExecutor = Executors.newScheduledThreadPool(2);
         ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
@@ -114,46 +89,50 @@ public class SR4RC extends Worker {
         // run the simulations
         GridEpisodeRunner<Robot<?>> runner = new GridEpisodeRunner<>(
                 Grid.create(1, 1, Pair.of("Robot", robot)),
-                reservoirEvaluator,
+                locomotion,
                 gridOnlineViewer,
                 executor
         );
         runner.run();
-         */
-
-        new SR4RC(args);
     }
 
     private double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
         KolmogorovSmirnovTest ks = new KolmogorovSmirnovTest();
         double[] fitArray = new double[empiricalDistribution.size()];
-        double[] realArray = new double[empiricalDistribution.size()];
+        double[] empiricalArray = new double[empiricalDistribution.size()];
         int index = 0;
         for (Point2 point : empiricalDistribution) {
             fitArray[index] = linearRegression.predict(point.x);
-            realArray[index] = point.y;
+            empiricalArray[index] = point.y;
             index ++;
+            if (index == 10) {
+                break;
+            }
         }
-        return ks.kolmogorovSmirnovStatistic(fitArray, realArray);
+        return ks.kolmogorovSmirnovStatistic(fitArray, empiricalArray);
     }
 
     @Override
     public void run() {
         // parameters
-        int width = 20;
-        int height = 20;
+        int gridSide = 10;
         int nGaussian = 10;
-        double gaussianThreshold = 0.5;
-        int populationSize = 100;
+        double gaussianThreshold = 1.5;
+        int populationSize = 20;
         double mutationProb = 0.01;
         int tournamentSize = 10;
         int cacheSize = 10000;
         int iterations = 100;
         int randomSeed = 0;
-        double finalT = 10;
+        double finalT = 30;
         double pulseDuration = 0.4;
         double avalancheDetectionThreshold = 0.0002;
         int binSize = 10;
+
+        MultiFileListenerFactory<Object, Grid<ControllableVoxel>, Double> statsListenerFactory = new MultiFileListenerFactory<>(
+                a("dir", "."),
+                a("statsFile", null)
+        );
 
         // task
         ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
@@ -163,6 +142,8 @@ public class SR4RC extends Worker {
                 avalancheDetectionThreshold,
                 binSize
         );
+
+        Function<Robot<?>, List<Double>> task = Misc.cached(reservoirEvaluator, 10000);
 
         // voxel made of the soft material
         final ControllableVoxel softMaterial = new ControllableVoxel(
@@ -191,9 +172,9 @@ public class SR4RC extends Worker {
             List<Integer> avalanchesSpatialExtension = new ArrayList<>();
             List<Integer> avalanchesTemporalExtension = new ArrayList<>();
             // a pulse controller is applied on each voxel
-            IntStream.range(0, width * height).forEach(i -> {
-                Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(width, height, (x, y) -> (Double t) -> {
-                    if (x * height + y == i) {
+            IntStream.range(0, (int) Math.pow(gridSide, 2d)).forEach(i -> {
+                Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(gridSide, gridSide, (x, y) -> (Double t) -> {
+                    if (x * gridSide + y == i) {
                         if (t < pulseDuration/2) {
                             return 1.0;
                         } else if (t < pulseDuration) {
@@ -202,7 +183,7 @@ public class SR4RC extends Worker {
                     }
                     return 0.0;
                 }));
-                List<Double> metrics = reservoirEvaluator.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
+                List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
 
                 if (metrics.get(0) > 0) {
                     avalanchesSpatialExtension.add(metrics.get(0).intValue());
@@ -215,25 +196,20 @@ public class SR4RC extends Worker {
             List<Point2> logLogSpatialDistribution = avalanchesSpatialExtension.stream()
                     .distinct()
                     .sorted()
-                    .limit(10)
                     .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))))
                     .collect(Collectors.toList());
 
             List<Point2> logLogTemporalDistribution = avalanchesTemporalExtension.stream()
                     .distinct()
                     .sorted()
-                    .limit(10)
                     .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))))
                     .collect(Collectors.toList());
-
-            //fitness := how well the empirical distribution fit a powerlaw distribution
 
             if ((logLogSpatialDistribution.size() < 2) || (logLogTemporalDistribution.size() < 2)) {
                 return 0.0;
             }
 
-            // linear regression of the log-log distribution
-            // take only the first 10 non-empty bins
+            // linear regression of the log-log distribution (only the first 10 non-empty bins are taken)
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
 
@@ -257,7 +233,7 @@ public class SR4RC extends Worker {
             // 3. KS statistics
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
-            double D = Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2));
+            double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2)), 2d);
 
             // 4. unique states
             // compute the actractor length
@@ -265,67 +241,83 @@ public class SR4RC extends Worker {
 
             // 5. log likelihood
             /*
-            if (fitenss > 3.5) {
+            if (fitness > 3.5) {
 
             }
              */
-            //System.out.println("R2: "+RSquared+"    D: "+D);
-            return RSquared + D;
+            return RSquared + DSquared;
         };
 
-        // mapper
-        Function<BitString, Grid<ControllableVoxel>> mapper = g -> {
+        // direct mapper
+        Function<BitString, Grid<ControllableVoxel>> directMapper = g -> {
             if (g.asBitSet().stream().sum() == 0) {
                 return null;
             }
-            return Utils.gridLargestConnected(Grid.create(width, height, (x, y) -> g.get(height * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
+            return Utils.gridLargestConnected(Grid.create(gridSide, gridSide, (x, y) -> g.get(gridSide * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
         };
 
-        // new mapper
-        /*
+        // gaussian mapper
         Function<List<Double>, Grid<ControllableVoxel>> gaussianMapper = g -> {
-            Grid<Double> gaussianGrid = Grid.create(width, height, 0d);
+            Grid<Double> gaussianGrid = Grid.create(gridSide, gridSide, 0d);
             int c = 0;
             for (int j = 0; j < nGaussian; j++) {
                 //extract parameter of the j-th gaussian for the i-th material
                 double muX = g.get(c + 0);
                 double muY = g.get(c + 1);
-                double sigma = Math.max(0d, g.get(c + 2));
-                double weight = g.get(c + 3);
-                c = c + 4;
+                double sigmaX = Math.max(0d, g.get(c + 2));
+                double sigmaY =  Math.max(0d, g.get(c + 3));
+                double weight = g.get(c + 4);
+                c = c + 5;
                 //compute over grid
-                for (int x = 0; x < width; x++) {
-                    for (int y = 0; y < height; y++) {
-                        double d = dist((double) x / (double) width, (double) y / (double) height, muX, muY);
-                        double g = gaussian(d, sigma) * weight;
-                        gaussianGrid.set(x, y, gaussianGrid.get(x, y) + g);
+                for (int x = 0; x < gridSide; x++) {
+                    for (int y = 0; y < gridSide; y++) {
+                        gaussianGrid.set(x, y, gaussianGrid.get(x, y) + weight * Math.exp(-(Math.pow(x - muX, 2d)/(2.0 * Math.pow(sigmaX, 2d)) + Math.pow(y - muY, 2d)/2.0 * Math.pow(sigmaY, 2d))));
                     }
                 }
             }
             //build grid with material index
-            Grid<ControllableVoxel> body = Grid.create(width, height, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
+            Grid<ControllableVoxel> body = Grid.create(gridSide, gridSide, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
+
+            // System.out.println(gaussianGrid.values().stream().filter(element -> element > gaussianThreshold).count());
+
             //find largest connected and crop
             body = Utils.gridLargestConnected(body, i -> i != null);
             body = Utils.cropGrid(body, i -> i != null);
             return body;
         };
-         */
 
         // evolver
-        Evolver<BitString, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
-                mapper,
-                new BitStringFactory(width * height), // w x h
+        Evolver<List<Double>, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
+                gaussianMapper,
+                new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, gridSide)),
                 PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
                 populationSize, // pop size
                 Map.of(
-                        new BitFlipMutation(mutationProb), 0.2d,
-                        new UniformCrossover<>(new BitStringFactory(width * height)), 0.8d
+                        new GaussianMutation(mutationProb), 0.2d,
+                        new UniformCrossover<>(new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, gridSide))), 0.8d
                 ),
                 new Tournament(tournamentSize), // depends on pop size
                 new Worst(), // worst individual dies
                 populationSize,
                 true
         );
+
+        List<DataCollector<?, ? super Grid<ControllableVoxel>, ? super Double>> collectors = List.of(
+                new Basic(),
+                new Population(),
+                new Diversity(),
+                new BestInfo("%6.4f"),
+                new FunctionOfOneBest<>(i -> List.of(
+                        new Item("serialized.grid", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s")
+                ))
+        );
+
+        Listener<? super Object, ? super Grid<ControllableVoxel>, ? super Double> listener;
+        if (statsListenerFactory.getBaseFileName() == null) {
+            listener = listener(collectors.toArray(DataCollector[]::new));
+        } else {
+            listener = statsListenerFactory.build(collectors.toArray(DataCollector[]::new));
+        }
 
         // optimization
         try {
@@ -334,12 +326,7 @@ public class SR4RC extends Worker {
                     new Iterations(iterations),
                     new Random(randomSeed),
                     executorService,
-                    listener(
-                            new Basic(),
-                            new Population(),
-                            new Diversity(),
-                            new BestInfo("%5.1f")
-                    )
+                    listener
             );
         } catch (InterruptedException e) {
             e.printStackTrace();
