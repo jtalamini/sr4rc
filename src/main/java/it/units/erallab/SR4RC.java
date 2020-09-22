@@ -16,6 +16,7 @@ import it.units.erallab.hmsrobots.viewers.GridOnlineViewer;
 import it.units.malelab.jgea.Worker;
 import it.units.malelab.jgea.core.Individual;
 import it.units.malelab.jgea.core.Problem;
+import it.units.malelab.jgea.core.evolver.CMAESEvolver;
 import it.units.malelab.jgea.core.evolver.Evolver;
 import it.units.malelab.jgea.core.evolver.StandardEvolver;
 import it.units.malelab.jgea.core.evolver.stopcondition.Iterations;
@@ -41,8 +42,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
+import static it.units.malelab.jgea.core.util.Args.d;
+import static it.units.malelab.jgea.core.util.Args.i;
 
 public class SR4RC extends Worker {
 
@@ -114,20 +119,27 @@ public class SR4RC extends Worker {
 
     @Override
     public void run() {
-        // parameters
-        int gridSide = 10;
-        int nGaussian = 10;
-        double gaussianThreshold = 1.5;
-        int populationSize = 20;
-        double mutationProb = 0.01;
-        int tournamentSize = 10;
+
+        // SCHEDULE: sbatch --array=0-10 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt go.breakable.sh
+        // STATUS: squeue -u $USER
+        // CANCEL: scancel
+
+        // general parameters
+        int randomSeed = i(a("randomSeed", "1"));
         int cacheSize = 10000;
-        int iterations = 100;
-        int randomSeed = 0;
+        // problem-related parameters
+        int gridSide = i(a("gridSize", "10"));
         double finalT = 30;
         double pulseDuration = 0.4;
-        double avalancheDetectionThreshold = 0.0002;
+        double avalancheThreshold = d(a("avalancheThreshold", "0.0002"));
         int binSize = 10;
+        double gaussianThreshold = 0d;
+        // evolutionary parameters
+        int nGaussian = i(a("nGaussian", "10"));
+        int popSize = 500;
+        int iterations = 100;
+        double mutationProb = 0.01;
+        int tournamentSize = 10;
 
         MultiFileListenerFactory<Object, Grid<ControllableVoxel>, Double> statsListenerFactory = new MultiFileListenerFactory<>(
                 a("dir", "."),
@@ -139,7 +151,7 @@ public class SR4RC extends Worker {
                 finalT, // task duration
                 ReservoirEvaluator.createTerrain("flat"),
                 new Settings(), // default settings for the physics engine
-                avalancheDetectionThreshold,
+                avalancheThreshold,
                 binSize
         );
 
@@ -266,40 +278,48 @@ public class SR4RC extends Worker {
                 double muY = g.get(c + 1);
                 double sigmaX = Math.max(0d, g.get(c + 2));
                 double sigmaY =  Math.max(0d, g.get(c + 3));
-                double weight = g.get(c + 4);
+                double weight = g.get(c + 4) * 2d -1;
                 c = c + 5;
                 //compute over grid
-                for (int x = 0; x < gridSide; x++) {
-                    for (int y = 0; y < gridSide; y++) {
-                        gaussianGrid.set(x, y, gaussianGrid.get(x, y) + weight * Math.exp(-(Math.pow(x - muX, 2d)/(2.0 * Math.pow(sigmaX, 2d)) + Math.pow(y - muY, 2d)/2.0 * Math.pow(sigmaY, 2d))));
+                for (int ix = 0; ix < gridSide; ix++) {
+                    for (int iy = 0; iy < gridSide; iy++) {
+                        double x = (double)ix/(double)gridSide;
+                        double y = (double)iy/(double)gridSide;
+                        gaussianGrid.set(ix, iy, gaussianGrid.get(ix, iy) + weight * Math.exp(-(Math.pow(x - muX, 2d)/(2.0 * Math.pow(sigmaX, 2d)) + Math.pow(y - muY, 2d)/2.0 * Math.pow(sigmaY, 2d))));
                     }
                 }
             }
             //build grid with material index
             Grid<ControllableVoxel> body = Grid.create(gridSide, gridSide, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
-
-            // System.out.println(gaussianGrid.values().stream().filter(element -> element > gaussianThreshold).count());
-
             //find largest connected and crop
             body = Utils.gridLargestConnected(body, i -> i != null);
             body = Utils.cropGrid(body, i -> i != null);
             return body;
         };
 
-        // evolver
+        // old evolver
         Evolver<List<Double>, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
                 gaussianMapper,
-                new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, gridSide)),
+                new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, 1)),
                 PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
-                populationSize, // pop size
+                popSize, // pop size
                 Map.of(
                         new GaussianMutation(mutationProb), 0.2d,
-                        new UniformCrossover<>(new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, gridSide))), 0.8d
+                        new UniformCrossover<>(new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, 1))), 0.8d
                 ),
                 new Tournament(tournamentSize), // depends on pop size
                 new Worst(), // worst individual dies
-                populationSize,
+                popSize,
                 true
+        );
+
+        // CMA-ES evolver: https://en.wikipedia.org/wiki/CMA-ES
+        Evolver<List<Double>, Grid<ControllableVoxel>, Double> cmaesEvolver = new CMAESEvolver<>(
+                gaussianMapper,
+                new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, 1)),
+                PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness),
+                0,
+                1
         );
 
         List<DataCollector<?, ? super Grid<ControllableVoxel>, ? super Double>> collectors = List.of(
@@ -321,13 +341,19 @@ public class SR4RC extends Worker {
 
         // optimization
         try {
-            evolver.solve(
+            Collection<Grid<ControllableVoxel>> solutions = cmaesEvolver.solve(
                     Misc.cached(problem.getFitnessFunction(), cacheSize),
                     new Iterations(iterations),
                     new Random(randomSeed),
                     executorService,
                     listener
             );
+            // print one solution
+            if (solutions.size() > 0) {
+                Predicate<ControllableVoxel> predicate = voxel -> voxel != null;
+                Grid<ControllableVoxel> best = (Grid<ControllableVoxel>) solutions.stream().limit(1);
+                System.out.println(Grid.toString(best, predicate));
+            }
         } catch (InterruptedException e) {
             e.printStackTrace();
         } catch (ExecutionException e) {
