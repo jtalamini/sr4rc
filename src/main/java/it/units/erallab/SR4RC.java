@@ -34,7 +34,6 @@ import it.units.malelab.jgea.representation.sequence.numeric.GaussianMutation;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
 import org.apache.commons.lang3.tuple.Pair;
-import org.apache.commons.math3.stat.inference.KolmogorovSmirnovTest;
 import org.dyn4j.dynamics.Settings;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -102,19 +101,20 @@ public class SR4RC extends Worker {
     }
 
     private double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
-        KolmogorovSmirnovTest ks = new KolmogorovSmirnovTest();
-        double[] fitArray = new double[empiricalDistribution.size()];
-        double[] empiricalArray = new double[empiricalDistribution.size()];
-        int index = 0;
-        for (Point2 point : empiricalDistribution) {
-            fitArray[index] = linearRegression.predict(point.x);
-            empiricalArray[index] = point.y;
-            index ++;
-            if (index == 10) {
-                break;
+        double theoreticalCumSum = 0.0;
+        double empiricalCumSum = 0.0;
+        double maxDistance = 0.0;
+        double currentDistance;
+        for (int i = 0; i < empiricalDistribution.size(); i++) {
+            Point2 point = empiricalDistribution.get(i);
+            theoreticalCumSum += linearRegression.predict(point.x);
+            empiricalCumSum += point.y;
+            currentDistance = Math.abs(theoreticalCumSum - empiricalCumSum);
+            if (currentDistance > maxDistance) {
+                maxDistance = currentDistance;
             }
         }
-        return ks.kolmogorovSmirnovStatistic(fitArray, empiricalArray);
+        return maxDistance;
     }
 
     @Override
@@ -178,7 +178,7 @@ public class SR4RC extends Worker {
 
         // problem
         Problem<Grid<ControllableVoxel>, Double> problem = () -> body -> {
-            if (body == null) {
+            if (body.values().stream().noneMatch(Objects::nonNull)) {
                 return 0.0;
             }
             List<Integer> avalanchesSpatialExtension = new ArrayList<>();
@@ -205,16 +205,21 @@ public class SR4RC extends Worker {
                 }
             });
 
+            int spatialSum = avalanchesSpatialExtension.stream()
+                    .mapToInt(Integer::intValue)
+                    .sum();
+            int temporalSum = avalanchesTemporalExtension.stream()
+                    .mapToInt(Integer::intValue)
+                    .sum();
+
             List<Point2> logLogSpatialDistribution = avalanchesSpatialExtension.stream()
                     .distinct()
-                    .sorted()
-                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))))
+                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))/spatialSum))
                     .collect(Collectors.toList());
 
             List<Point2> logLogTemporalDistribution = avalanchesTemporalExtension.stream()
                     .distinct()
-                    .sorted()
-                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))))
+                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))/temporalSum))
                     .collect(Collectors.toList());
 
             if ((logLogSpatialDistribution.size() < 2) || (logLogTemporalDistribution.size() < 2)) {
@@ -224,39 +229,13 @@ public class SR4RC extends Worker {
             // linear regression of the log-log distribution (only the first 10 non-empty bins are taken)
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
-
             double RSquared = (spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
 
-            //TODO from here fitness computation
-
-            // 2. bins ????
-            // count the number of bins that are not empty for each distribution
-            // then compute the tanh
-
-            /*
-            double max = avalanchesDistribution.entrySet().stream()
-                    .mapToDouble(Double::doubleValue)
-                    .max();
-            double average = avalanchesDistribution.entrySet().stream()
-                    .mapToDouble(Double::doubleValue)
-                    .average();
-            double binsCoefficient = Math.tanh(5 * (0.9 * max) + 0.1 * average);
-             */
             // 3. KS statistics
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
             double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2)), 2d);
 
-            // 4. unique states
-            // compute the actractor length
-            // divide the actrator length by the number of possible states (2^number of voxels)
-
-            // 5. log likelihood
-            /*
-            if (fitness > 3.5) {
-
-            }
-             */
             return RSquared + DSquared;
         };
 
@@ -271,13 +250,14 @@ public class SR4RC extends Worker {
         // gaussian mapper
         Function<List<Double>, Grid<ControllableVoxel>> gaussianMapper = g -> {
             Grid<Double> gaussianGrid = Grid.create(gridSide, gridSide, 0d);
+            double epsilon = 0.1;
             int c = 0;
             for (int j = 0; j < nGaussian; j++) {
                 //extract parameter of the j-th gaussian for the i-th material
                 double muX = g.get(c + 0);
                 double muY = g.get(c + 1);
-                double sigmaX = Math.max(0d, g.get(c + 2));
-                double sigmaY =  Math.max(0d, g.get(c + 3));
+                double sigmaX = Math.max(0d, g.get(c + 2)) + epsilon;
+                double sigmaY =  Math.max(0d, g.get(c + 3)) + epsilon;
                 double weight = g.get(c + 4) * 2d -1;
                 c = c + 5;
                 //compute over grid
@@ -285,7 +265,7 @@ public class SR4RC extends Worker {
                     for (int iy = 0; iy < gridSide; iy++) {
                         double x = (double)ix/(double)gridSide;
                         double y = (double)iy/(double)gridSide;
-                        gaussianGrid.set(ix, iy, gaussianGrid.get(ix, iy) + weight * Math.exp(-(Math.pow(x - muX, 2d)/(2.0 * Math.pow(sigmaX, 2d)) + Math.pow(y - muY, 2d)/2.0 * Math.pow(sigmaY, 2d))));
+                        gaussianGrid.set(ix, iy, gaussianGrid.get(ix, iy) + weight * Math.exp(-(Math.pow(x - muX, 2d)/(2.0 * Math.pow(sigmaX, 2d)) + Math.pow(y - muY, 2d)/(2.0 * Math.pow(sigmaY, 2d)))));
                     }
                 }
             }
@@ -351,7 +331,7 @@ public class SR4RC extends Worker {
             // print one solution
             if (solutions.size() > 0) {
                 Predicate<ControllableVoxel> predicate = voxel -> voxel != null;
-                Grid<ControllableVoxel> best = (Grid<ControllableVoxel>) solutions.stream().limit(1);
+                Grid<ControllableVoxel> best = (Grid<ControllableVoxel>) solutions.toArray()[0];
                 System.out.println(Grid.toString(best, predicate));
             }
         } catch (InterruptedException e) {

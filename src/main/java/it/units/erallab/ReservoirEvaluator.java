@@ -37,7 +37,6 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
         Object[] voxelsCurrentArea;
         int[] avalanchedVoxels = new int[voxelGridSize];
         int avalanchesTemporalExtension = 0;
-        int avalanchesSpatialExtension;
 
         World world = new World();
         // disable gravity
@@ -48,22 +47,8 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
         //Ground ground = new Ground(this.groundProfile[0], this.groundProfile[1]);
         //ground.addTo(world);
         //worldObjects.add(ground);
-
         BoundingBox boundingBox = robot.boundingBox();
-
         robot.translate(new Vector2(this.initialPlacement - boundingBox.min.x, 0.0D));
-
-        /*
-        double minYGap = robot.getVoxels().values().stream()
-                .filter(Objects::nonNull)
-                .mapToDouble((v) -> ((Voxel) v.immutable()).getShape().boundingBox().min.y - ground.yAt(v.getCenter().x))
-                .min()
-                .orElse(0.0D);
-
-        robot.translate(new Vector2(0.0D, 1.0D - minYGap));
-
-         */
-
         robot.addTo(world);
         worldObjects.add(robot);
 
@@ -104,14 +89,7 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
                 listener.listen(snapshot);
             }
         }
-        avalanchesSpatialExtension = Arrays.stream(avalanchedVoxels).sum();
-
-        List<Double> results = new ArrayList();
-        results.add((double)avalanchesSpatialExtension);
-        results.add((double)(avalanchesTemporalExtension/binSize + 1));
-        // System.out.println("Spatial extension: "+avalanchesSpatialExtension);
-        // System.out.println("Temporal extension: "+avalanchesTemporalExtension);
-        return results;
+        return List.of((double)Arrays.stream(avalanchedVoxels).sum(), (double)(avalanchesTemporalExtension/binSize + 1));
     }
 
     private static double[][] randomTerrain(int n, double length, double peak, double borderHeight, Random random) {
