@@ -29,8 +29,9 @@ import it.units.malelab.jgea.core.selector.Worst;
 import it.units.malelab.jgea.core.util.Misc;
 import it.units.malelab.jgea.representation.sequence.FixedLengthListFactory;
 import it.units.malelab.jgea.representation.sequence.UniformCrossover;
+import it.units.malelab.jgea.representation.sequence.bit.BitFlipMutation;
 import it.units.malelab.jgea.representation.sequence.bit.BitString;
-import it.units.malelab.jgea.representation.sequence.numeric.GaussianMutation;
+import it.units.malelab.jgea.representation.sequence.bit.BitStringFactory;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
 import org.apache.commons.lang3.tuple.Pair;
@@ -120,12 +121,12 @@ public class SR4RC extends Worker {
     @Override
     public void run() {
 
-        // SCHEDULE: sbatch --array=0-10 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt go.breakable.sh
+        // SCHEDULE: sbatch --array=0-10 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt sr4rc.sh
         // STATUS: squeue -u $USER
         // CANCEL: scancel
 
         // general parameters
-        int randomSeed = i(a("randomSeed", "1"));
+        int randomSeed = i(a("randomSeed", "666"));
         int cacheSize = 10000;
         // problem-related parameters
         int gridSide = i(a("gridSize", "10"));
@@ -136,6 +137,7 @@ public class SR4RC extends Worker {
         double gaussianThreshold = 0d;
         // evolutionary parameters
         int nGaussian = i(a("nGaussian", "10"));
+        String evolverType = a("evolver", "direct");
         int popSize = 500;
         int iterations = 100;
         double mutationProb = 0.01;
@@ -250,7 +252,7 @@ public class SR4RC extends Worker {
         // gaussian mapper
         Function<List<Double>, Grid<ControllableVoxel>> gaussianMapper = g -> {
             Grid<Double> gaussianGrid = Grid.create(gridSide, gridSide, 0d);
-            double epsilon = 0.1;
+            double epsilon = 0.0001;
             int c = 0;
             for (int j = 0; j < nGaussian; j++) {
                 //extract parameter of the j-th gaussian for the i-th material
@@ -278,14 +280,14 @@ public class SR4RC extends Worker {
         };
 
         // old evolver
-        Evolver<List<Double>, Grid<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
-                gaussianMapper,
-                new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, 1)),
+        Evolver<BitString, Grid<ControllableVoxel>, Double> directEvolver = new StandardEvolver<>(
+                directMapper,
+                new BitStringFactory(gridSide * gridSide),
                 PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
                 popSize, // pop size
                 Map.of(
-                        new GaussianMutation(mutationProb), 0.2d,
-                        new UniformCrossover<>(new FixedLengthListFactory<>(nGaussian * 5, new UniformDoubleFactory(0, 1))), 0.8d
+                        new BitFlipMutation(mutationProb), 0.2d,
+                        new UniformCrossover<>(new BitStringFactory(gridSide * gridSide)), 0.8d
                 ),
                 new Tournament(tournamentSize), // depends on pop size
                 new Worst(), // worst individual dies
@@ -320,23 +322,32 @@ public class SR4RC extends Worker {
         }
 
         // optimization
+        Collection<Grid<ControllableVoxel>> solutions = new ArrayList<>();
         try {
-            Collection<Grid<ControllableVoxel>> solutions = cmaesEvolver.solve(
-                    Misc.cached(problem.getFitnessFunction(), cacheSize),
-                    new Iterations(iterations),
-                    new Random(randomSeed),
-                    executorService,
-                    listener
-            );
+            if (evolverType.equals("direct")) {
+                solutions = directEvolver.solve(
+                        Misc.cached(problem.getFitnessFunction(), cacheSize),
+                        new Iterations(iterations),
+                        new Random(randomSeed),
+                        executorService,
+                        listener
+                );
+            } else if (evolverType.equals("cmaes")) {
+                solutions = cmaesEvolver.solve(
+                        Misc.cached(problem.getFitnessFunction(), cacheSize),
+                        new Iterations(iterations),
+                        new Random(randomSeed),
+                        executorService,
+                        listener
+                );
+            }
             // print one solution
             if (solutions.size() > 0) {
                 Predicate<ControllableVoxel> predicate = voxel -> voxel != null;
                 Grid<ControllableVoxel> best = (Grid<ControllableVoxel>) solutions.toArray()[0];
                 System.out.println(Grid.toString(best, predicate));
             }
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        } catch (ExecutionException e) {
+        } catch (InterruptedException | ExecutionException e) {
             e.printStackTrace();
         }
     }
