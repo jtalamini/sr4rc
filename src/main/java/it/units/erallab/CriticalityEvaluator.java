@@ -13,18 +13,16 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
+public class CriticalityEvaluator extends AbstractTask<Robot<?>, List<Double>> {
     private final double finalT;
-    private final double[][] groundProfile;
     private final double initialPlacement;
     private double threshold;
     private int binSize;
 
-    public ReservoirEvaluator(double finalT, double[][] groundProfile, Settings settings, double threshold, int binSize) {
+    public CriticalityEvaluator(double finalT, Settings settings, double threshold, int binSize) {
         super(settings);
         this.finalT = finalT;
-        this.groundProfile = groundProfile;
-        this.initialPlacement = groundProfile[0][1] + 1.0D;
+        this.initialPlacement = 1.0D;
         //this.threshold = 0.00001d;
         this.threshold = threshold;
         this.binSize = binSize;
@@ -44,9 +42,7 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
 
         world.setSettings(this.settings);
         List<WorldObject> worldObjects = new ArrayList();
-        //Ground ground = new Ground(this.groundProfile[0], this.groundProfile[1]);
-        //ground.addTo(world);
-        //worldObjects.add(ground);
+
         BoundingBox boundingBox = robot.boundingBox();
         robot.translate(new Vector2(this.initialPlacement - boundingBox.min.x, 0.0D));
         robot.addTo(world);
@@ -90,33 +86,5 @@ public class ReservoirEvaluator extends AbstractTask<Robot<?>, List<Double>> {
             }
         }
         return List.of((double)Arrays.stream(avalanchedVoxels).sum(), (double)(avalanchesTemporalExtension/binSize + 1));
-    }
-
-    private static double[][] randomTerrain(int n, double length, double peak, double borderHeight, Random random) {
-        double[] xs = new double[n + 2];
-        double[] ys = new double[n + 2];
-        xs[0] = 0.0D;
-        xs[n + 1] = length;
-        ys[0] = borderHeight;
-        ys[n + 1] = borderHeight;
-
-        for(int i = 1; i < n + 1; ++i) {
-            xs[i] = 1.0D + (double)(i - 1) * (length - 2.0D) / (double)n;
-            ys[i] = random.nextDouble() * peak;
-        }
-
-        return new double[][]{xs, ys};
-    }
-
-    public static double[][] createTerrain(String name) {
-        Random random = new Random(1L);
-        if (name.equals("flat")) {
-            return new double[][]{{0.0D, 10.0D, 1990.0D, 2000.0D}, {100.0D, 0.0D, 0.0D, 100.0D}};
-        } else if (name.startsWith("uneven")) {
-            int h = Integer.parseInt(name.replace("uneven", ""));
-            return randomTerrain(50, 2000.0D, (double)h, 100.0D, random);
-        } else {
-            return null;
-        }
     }
 }

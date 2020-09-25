@@ -73,16 +73,6 @@ public class LinearRegression {
         return r2;
     }
 
-    public double getResidualSumSquared() { return residualSumSquared; }
-
-    public double interceptStdErr() {
-        return Math.sqrt(svar0);
-    }
-
-    public double slopeStdErr() {
-        return Math.sqrt(svar1);
-    }
-
     public double predict(double x) {
         return slope*x + intercept;
     }

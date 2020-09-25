@@ -1,18 +1,13 @@
 package it.units.erallab;
 
-import com.google.common.collect.Lists;
 import it.units.erallab.hmsrobots.core.controllers.Controller;
 import it.units.erallab.hmsrobots.core.controllers.TimeFunctions;
 import it.units.erallab.hmsrobots.core.objects.ControllableVoxel;
 import it.units.erallab.hmsrobots.core.objects.Robot;
 import it.units.erallab.hmsrobots.core.objects.Voxel;
-import it.units.erallab.hmsrobots.tasks.Locomotion;
 import it.units.erallab.hmsrobots.util.Grid;
 import it.units.erallab.hmsrobots.util.Point2;
 import it.units.erallab.hmsrobots.util.Utils;
-import it.units.erallab.hmsrobots.viewers.GraphicsDrawer;
-import it.units.erallab.hmsrobots.viewers.GridEpisodeRunner;
-import it.units.erallab.hmsrobots.viewers.GridOnlineViewer;
 import it.units.malelab.jgea.Worker;
 import it.units.malelab.jgea.core.Individual;
 import it.units.malelab.jgea.core.Problem;
@@ -34,13 +29,10 @@ import it.units.malelab.jgea.representation.sequence.bit.BitString;
 import it.units.malelab.jgea.representation.sequence.bit.BitStringFactory;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
-import org.apache.commons.lang3.tuple.Pair;
 import org.dyn4j.dynamics.Settings;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -57,48 +49,6 @@ public class SR4RC extends Worker {
 
     public static void main(String[] args) {
         new SR4RC(args);
-    }
-
-    private void validate(Grid<ControllableVoxel> body) {
-        Controller<ControllableVoxel> testController = new TimeFunctions(Grid.create(
-                body.getW(), body.getH(),
-                (x, y) -> (Double t) -> Math.sin(-2 * Math.PI * t + Math.PI * ((double) x / (double) body.getW()))
-        ));
-
-        final Locomotion locomotion = new Locomotion(
-                20,
-                Locomotion.createTerrain("flat"),
-                Lists.newArrayList(
-                        Locomotion.Metric.TRAVEL_X_VELOCITY,
-                        Locomotion.Metric.RELATIVE_CONTROL_POWER
-                ),
-                new Settings()
-        );
-
-        Robot<ControllableVoxel> robot = new Robot<>(testController, body);
-
-        ScheduledExecutorService uiExecutor = Executors.newScheduledThreadPool(2);
-        ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-        // configure the viewer
-        GridOnlineViewer gridOnlineViewer = new GridOnlineViewer(
-                Grid.create(1, 1, "Simulation"),
-                uiExecutor,
-                GraphicsDrawer.build().setConfigurable("drawers", List.of(
-                        it.units.erallab.hmsrobots.viewers.drawers.Robot.build(),
-                        it.units.erallab.hmsrobots.viewers.drawers.Voxel.build(),
-                        it.units.erallab.hmsrobots.viewers.drawers.Ground.build()
-                ))
-        );
-        // set the delay from the simulation to the viewer
-        gridOnlineViewer.start(0);
-        // run the simulations
-        GridEpisodeRunner<Robot<?>> runner = new GridEpisodeRunner<>(
-                Grid.create(1, 1, Pair.of("Robot", robot)),
-                locomotion,
-                gridOnlineViewer,
-                executor
-        );
-        runner.run();
     }
 
     private double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
@@ -118,18 +68,30 @@ public class SR4RC extends Worker {
         return maxDistance;
     }
 
+    private String printBestDistribution(Map<Grid<ControllableVoxel>, double[]> distributions, Grid<ControllableVoxel> best) {
+        double[] bestDistribution = distributions.get(best);
+        distributions.clear();
+        return Arrays.stream(bestDistribution).mapToObj(String::valueOf).collect(Collectors.joining(" "));
+    }
+
+
     @Override
     public void run() {
+
+        Map<Grid<ControllableVoxel>, double[]> spatialDistributions = new ConcurrentHashMap<>();
+        Map<Grid<ControllableVoxel>, double[]> temporalDistributions = new ConcurrentHashMap<>();
 
         // SCHEDULE: sbatch --array=0-10 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt sr4rc.sh
         // STATUS: squeue -u $USER
         // CANCEL: scancel
 
+        double minusInfiniteAPprox = -1000000.0;
+
         // general parameters
         int randomSeed = i(a("randomSeed", "666"));
         int cacheSize = 10000;
         // problem-related parameters
-        int gridSide = i(a("gridSize", "10"));
+        int gridSide = i(a("gridSize", "5"));
         double finalT = 30;
         double pulseDuration = 0.4;
         double avalancheThreshold = d(a("avalancheThreshold", "0.0002"));
@@ -149,15 +111,14 @@ public class SR4RC extends Worker {
         );
 
         // task
-        ReservoirEvaluator reservoirEvaluator = new ReservoirEvaluator(
+        CriticalityEvaluator criticalityEvaluator = new CriticalityEvaluator(
                 finalT, // task duration
-                ReservoirEvaluator.createTerrain("flat"),
                 new Settings(), // default settings for the physics engine
                 avalancheThreshold,
                 binSize
         );
 
-        Function<Robot<?>, List<Double>> task = Misc.cached(reservoirEvaluator, 10000);
+        Function<Robot<?>, List<Double>> task = Misc.cached(criticalityEvaluator, 10000);
 
         // voxel made of the soft material
         final ControllableVoxel softMaterial = new ControllableVoxel(
@@ -183,8 +144,10 @@ public class SR4RC extends Worker {
             if (body.values().stream().noneMatch(Objects::nonNull)) {
                 return 0.0;
             }
-            List<Integer> avalanchesSpatialExtension = new ArrayList<>();
-            List<Integer> avalanchesTemporalExtension = new ArrayList<>();
+
+            int[] avalanchesSpatialExtension = new int[gridSide * gridSide];
+            int[] avalanchesTemporalExtension = new int[1000];
+
             // a pulse controller is applied on each voxel
             IntStream.range(0, (int) Math.pow(gridSide, 2d)).forEach(i -> {
                 Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(gridSide, gridSide, (x, y) -> (Double t) -> {
@@ -199,36 +162,41 @@ public class SR4RC extends Worker {
                 }));
                 List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
 
-                if (metrics.get(0) > 0) {
-                    avalanchesSpatialExtension.add(metrics.get(0).intValue());
-                }
-                if (metrics.get(1) > 0) {
-                    avalanchesTemporalExtension.add(metrics.get(1).intValue());
-                }
+                avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
+                avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
             });
 
-            int spatialSum = avalanchesSpatialExtension.stream()
-                    .mapToInt(Integer::intValue)
-                    .sum();
-            int temporalSum = avalanchesTemporalExtension.stream()
-                    .mapToInt(Integer::intValue)
-                    .sum();
-
-            List<Point2> logLogSpatialDistribution = avalanchesSpatialExtension.stream()
-                    .distinct()
-                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesSpatialExtension, avalanche))/spatialSum))
-                    .collect(Collectors.toList());
-
-            List<Point2> logLogTemporalDistribution = avalanchesTemporalExtension.stream()
-                    .distinct()
-                    .map(avalanche -> Point2.build(Math.log(avalanche), Math.log(Collections.frequency(avalanchesTemporalExtension, avalanche))/temporalSum))
-                    .collect(Collectors.toList());
-
-            if ((logLogSpatialDistribution.size() < 2) || (logLogTemporalDistribution.size() < 2)) {
+            // exit condition
+            int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension)
+                    .filter(frequency -> frequency > 0)
+                    .count();
+            int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension)
+                    .filter(frequency -> frequency > 0)
+                    .count();
+            if (spatialSizeNumber < 2 || temporalSizeNumber < 2) {
                 return 0.0;
             }
 
-            // linear regression of the log-log distribution (only the first 10 non-empty bins are taken)
+            // create 2 normalized distributions for each individual
+            double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
+                    .mapToDouble(frequency -> frequency / (double)(gridSide * gridSide))
+                    .toArray();
+            spatialDistributions.put(body, spatialDistribution);
+
+            double[] temporalDistribution = Arrays.stream(avalanchesTemporalExtension)
+                    .mapToDouble(frequency -> frequency / (double)(gridSide * gridSide))
+                    .toArray();
+            temporalDistributions.put(body, temporalDistribution);
+
+            // compute the log-log of the 2 distributions
+            List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
+                    .mapToObj(i -> Point2.build(Math.log(i), spatialDistribution[i] > 0.0 ? Math.log(spatialDistribution[i]) : minusInfiniteAPprox))
+                    .collect(Collectors.toList());
+            List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
+                    .mapToObj(i -> Point2.build(Math.log((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log(temporalDistribution[i]) : minusInfiniteAPprox))
+                    .collect(Collectors.toList());
+
+            // linear regression of the log-log distribution
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
             double RSquared = (spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
@@ -310,7 +278,9 @@ public class SR4RC extends Worker {
                 new Diversity(),
                 new BestInfo("%6.4f"),
                 new FunctionOfOneBest<>(i -> List.of(
-                        new Item("serialized.grid", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s")
+                        new Item("serialized.grid", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s"),
+                        new Item("spatial.distribution", printBestDistribution(spatialDistributions, i.getSolution()), "%s"),
+                        new Item("temporal.distribution", printBestDistribution(temporalDistributions, i.getSolution()), "%s")
                 ))
         );
 
