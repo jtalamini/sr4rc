@@ -68,18 +68,82 @@ public class SR4RC extends Worker {
         return maxDistance;
     }
 
-    private String printBestDistribution(Map<Grid<ControllableVoxel>, double[]> distributions, Grid<ControllableVoxel> best) {
-        double[] bestDistribution = distributions.get(best);
-        distributions.clear();
-        return Arrays.stream(bestDistribution).mapToObj(String::valueOf).collect(Collectors.joining(" "));
+    private String printDistribution(List<Point2> distribution) {
+        return distribution.stream()
+                .map(point -> point.x+":"+point.y)
+                .collect(Collectors.joining(" "));
+    }
+
+    private String printBody(Grid<ControllableVoxel> bestBody) {
+        String bestBodyString = "";
+        for (int y = 0; y < bestBody.getH(); y++) {
+            for (int x = 0; x < bestBody.getW(); x++) {
+                bestBodyString += bestBody.get(x, y) == null ? "0" : "X";
+                bestBodyString += x == bestBody.getW()-1 ? "n " : " ";
+            }
+        }
+        return bestBodyString;
+    }
+
+    private String testBest(Grid<ControllableVoxel> best, double pulseDuration, CriticalityEvaluator task, int binSize, double minusInfiniteAPprox) {
+        int[] avalanchesSpatialExtension = new int[best.getW() * best.getW()];
+        int[] avalanchesTemporalExtension = new int[1000];
+
+        // a pulse controller is applied on each voxel
+        IntStream.range(0, (int) Math.pow(best.getW(), 2d)).forEach(i -> {
+            Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(best.getW(), best.getW(), (x, y) -> (Double t) -> {
+                if (x * best.getW() + y == i) {
+                    if (t < pulseDuration/2) {
+                        return 1.0;
+                    } else if (t < pulseDuration) {
+                        return -1.0;
+                    }
+                }
+                return 0.0;
+            }));
+            List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(best)));
+
+            avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
+            avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+        });
+
+        // exit condition
+        int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension)
+                .filter(frequency -> frequency > 0)
+                .count();
+        int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension)
+                .filter(frequency -> frequency > 0)
+                .count();
+
+        // create 2 normalized distributions for each individual
+        double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
+                .mapToDouble(frequency -> frequency / (double)(best.getW() * best.getW()))
+                .toArray();
+
+        double[] temporalDistribution = Arrays.stream(avalanchesTemporalExtension)
+                .mapToDouble(frequency -> frequency / (double)(best.getW() * best.getW()))
+                .toArray();
+
+        String distributions = "space ";
+        // compute the log-log of the 2 distributions
+        List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
+                .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : minusInfiniteAPprox))
+                .collect(Collectors.toList());
+        distributions += printDistribution(logLogSpatialDistribution);
+
+        List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
+                .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : minusInfiniteAPprox))
+                .collect(Collectors.toList());
+        distributions += " time "+printDistribution(logLogTemporalDistribution);
+        return distributions;
     }
 
 
     @Override
     public void run() {
 
-        Map<Grid<ControllableVoxel>, double[]> spatialDistributions = new ConcurrentHashMap<>();
-        Map<Grid<ControllableVoxel>, double[]> temporalDistributions = new ConcurrentHashMap<>();
+        Map<Grid<ControllableVoxel>, List<Point2>> spatialDistributions = new ConcurrentHashMap<>();
+        Map<Grid<ControllableVoxel>, List<Point2>> temporalDistributions = new ConcurrentHashMap<>();
 
         // SCHEDULE: sbatch --array=0-10 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt sr4rc.sh
         // STATUS: squeue -u $USER
@@ -181,20 +245,20 @@ public class SR4RC extends Worker {
             double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
                     .mapToDouble(frequency -> frequency / (double)(gridSide * gridSide))
                     .toArray();
-            spatialDistributions.put(body, spatialDistribution);
 
             double[] temporalDistribution = Arrays.stream(avalanchesTemporalExtension)
                     .mapToDouble(frequency -> frequency / (double)(gridSide * gridSide))
                     .toArray();
-            temporalDistributions.put(body, temporalDistribution);
 
             // compute the log-log of the 2 distributions
             List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
-                    .mapToObj(i -> Point2.build(Math.log(i), spatialDistribution[i] > 0.0 ? Math.log(spatialDistribution[i]) : minusInfiniteAPprox))
+                    .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : minusInfiniteAPprox))
                     .collect(Collectors.toList());
+            spatialDistributions.put(body, logLogSpatialDistribution);
             List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
-                    .mapToObj(i -> Point2.build(Math.log((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log(temporalDistribution[i]) : minusInfiniteAPprox))
+                    .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : minusInfiniteAPprox))
                     .collect(Collectors.toList());
+            temporalDistributions.put(body, logLogTemporalDistribution);
 
             // linear regression of the log-log distribution
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
@@ -242,8 +306,8 @@ public class SR4RC extends Worker {
             //build grid with material index
             Grid<ControllableVoxel> body = Grid.create(gridSide, gridSide, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
             //find largest connected and crop
-            body = Utils.gridLargestConnected(body, i -> i != null);
-            body = Utils.cropGrid(body, i -> i != null);
+            body = Utils.gridLargestConnected(body, Objects::nonNull);
+            body = Utils.cropGrid(body, Objects::nonNull);
             return body;
         };
 
@@ -279,8 +343,8 @@ public class SR4RC extends Worker {
                 new BestInfo("%6.4f"),
                 new FunctionOfOneBest<>(i -> List.of(
                         new Item("serialized.grid", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s"),
-                        new Item("spatial.distribution", printBestDistribution(spatialDistributions, i.getSolution()), "%s"),
-                        new Item("temporal.distribution", printBestDistribution(temporalDistributions, i.getSolution()), "%s")
+                        new Item("spatial.distribution", testBest(i.getSolution(), pulseDuration, criticalityEvaluator, binSize, minusInfiniteAPprox), "%s"),
+                        new Item("body", printBody(i.getSolution()), "%s")
                 ))
         );
 
@@ -313,7 +377,7 @@ public class SR4RC extends Worker {
             }
             // print one solution
             if (solutions.size() > 0) {
-                Predicate<ControllableVoxel> predicate = voxel -> voxel != null;
+                Predicate<ControllableVoxel> predicate = Objects::nonNull;
                 Grid<ControllableVoxel> best = (Grid<ControllableVoxel>) solutions.toArray()[0];
                 System.out.println(Grid.toString(best, predicate));
             }
