@@ -85,7 +85,7 @@ public class SR4RC extends Worker {
         return bestBodyString;
     }
 
-    private String testBest(Grid<ControllableVoxel> best, double pulseDuration, CriticalityEvaluator task, int binSize, double minusInfiniteAPprox) {
+    private String testBest(Grid<ControllableVoxel> best, double pulseDuration, CriticalityEvaluator task, int binSize) {
         int[] avalanchesSpatialExtension = new int[best.getW() * best.getW()];
         int[] avalanchesTemporalExtension = new int[1000];
 
@@ -107,14 +107,6 @@ public class SR4RC extends Worker {
             avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
         });
 
-        // exit condition
-        int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension)
-                .filter(frequency -> frequency > 0)
-                .count();
-        int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension)
-                .filter(frequency -> frequency > 0)
-                .count();
-
         // create 2 normalized distributions for each individual
         double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
                 .mapToDouble(frequency -> frequency / (double)(best.getW() * best.getW()))
@@ -127,12 +119,12 @@ public class SR4RC extends Worker {
         String distributions = "space ";
         // compute the log-log of the 2 distributions
         List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
-                .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : minusInfiniteAPprox))
+                .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : 0))
                 .collect(Collectors.toList());
         distributions += printDistribution(logLogSpatialDistribution);
 
         List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
-                .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : minusInfiniteAPprox))
+                .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : 0))
                 .collect(Collectors.toList());
         distributions += " time "+printDistribution(logLogTemporalDistribution);
         return distributions;
@@ -148,8 +140,6 @@ public class SR4RC extends Worker {
         // SCHEDULE: sbatch --array=0-10 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt sr4rc.sh
         // STATUS: squeue -u $USER
         // CANCEL: scancel
-
-        double minusInfiniteAPprox = -1000000.0;
 
         // general parameters
         int randomSeed = i(a("randomSeed", "666"));
@@ -252,11 +242,11 @@ public class SR4RC extends Worker {
 
             // compute the log-log of the 2 distributions
             List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
-                    .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : minusInfiniteAPprox))
+                    .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : 0))
                     .collect(Collectors.toList());
             spatialDistributions.put(body, logLogSpatialDistribution);
             List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
-                    .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : minusInfiniteAPprox))
+                    .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : 0))
                     .collect(Collectors.toList());
             temporalDistributions.put(body, logLogTemporalDistribution);
 
@@ -343,7 +333,7 @@ public class SR4RC extends Worker {
                 new BestInfo("%6.4f"),
                 new FunctionOfOneBest<>(i -> List.of(
                         new Item("serialized.grid", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s"),
-                        new Item("spatial.distribution", testBest(i.getSolution(), pulseDuration, criticalityEvaluator, binSize, minusInfiniteAPprox), "%s"),
+                        new Item("distributions", testBest(i.getSolution(), pulseDuration, criticalityEvaluator, binSize), "%s"),
                         new Item("body", printBody(i.getSolution()), "%s")
                 ))
         );
