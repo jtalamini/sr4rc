@@ -14,6 +14,7 @@ import it.units.malelab.jgea.core.Problem;
 import it.units.malelab.jgea.core.evolver.CMAESEvolver;
 import it.units.malelab.jgea.core.evolver.Evolver;
 import it.units.malelab.jgea.core.evolver.StandardEvolver;
+import it.units.malelab.jgea.core.evolver.stopcondition.Births;
 import it.units.malelab.jgea.core.evolver.stopcondition.Iterations;
 import it.units.malelab.jgea.core.listener.Listener;
 import it.units.malelab.jgea.core.listener.MultiFileListenerFactory;
@@ -84,7 +85,10 @@ public class SR4RC extends Worker {
     }
 
     private String testBest(Grid<ControllableVoxel> best, double pulseDuration, CriticalityEvaluator task, int binSize) {
-        int[] avalanchesSpatialExtension = new int[best.getW() * best.getW() + 1];
+
+        int bodySize = (int) best.values().stream().filter(Objects::nonNull).count();
+
+        int[] avalanchesSpatialExtension = new int[bodySize + 1];
         int[] avalanchesTemporalExtension = new int[1000];
         // a pulse controller is applied on each voxel
         IntStream.range(0, (int) Math.pow(best.getW(), 2d)).forEach(i -> {
@@ -121,7 +125,7 @@ public class SR4RC extends Worker {
         // CANCEL: scancel
 
         // general parameters
-        int randomSeed = i(a("randomSeed", "1"));
+        int randomSeed = i(a("randomSeed", "77"));
         int cacheSize = 10000;
         // problem-related parameters
         int gridSide = i(a("gridSize", "5"));
@@ -132,9 +136,10 @@ public class SR4RC extends Worker {
         double gaussianThreshold = 0d;
         // evolutionary parameters
         int nGaussian = i(a("nGaussian", "10"));
-        String evolverType = a("evolver", "cmaes");
+        String evolverType = a("evolver", "direct");
         int popSize = 500;
         int iterations = 100;
+        int birth = 5000;
         double mutationProb = 0.01;
         int tournamentSize = 10;
 
@@ -174,12 +179,15 @@ public class SR4RC extends Worker {
 
         // problem
         Problem<Grid<ControllableVoxel>, Double> problem = () -> body -> {
-            if (body.values().stream().noneMatch(Objects::nonNull)) {
+
+            int bodySize = (int) body.values().stream().filter(Objects::nonNull).count();
+
+            if (bodySize < 2) {
                 return 0.0;
             }
 
-            int[] avalanchesSpatialExtension = new int[gridSide * gridSide + 1];
-            int[] avalanchesTemporalExtension = new int[1000];
+            int[] avalanchesSpatialExtension = new int[bodySize + 1];
+            int[] avalanchesTemporalExtension = new int[100];
 
             // a pulse controller is applied on each voxel
             IntStream.range(0, (int) Math.pow(gridSide, 2d)).forEach(i -> {
@@ -204,12 +212,9 @@ public class SR4RC extends Worker {
             });
 
             // exit condition
-            int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension)
-                    .filter(frequency -> frequency > 0)
-                    .count();
-            int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension)
-                    .filter(frequency -> frequency > 0)
-                    .count();
+            int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension).filter(frequency -> frequency > 0).count();
+            int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension).filter(frequency -> frequency > 0).count();
+
             if (spatialSizeNumber < 2 || temporalSizeNumber < 2) {
                 return 0.0;
             }
@@ -227,6 +232,7 @@ public class SR4RC extends Worker {
             List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
                     .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : 0))
                     .collect(Collectors.toList());
+
             List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
                     .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : 0))
                     .collect(Collectors.toList());
@@ -234,13 +240,12 @@ public class SR4RC extends Worker {
             // linear regression of the log-log distribution
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
-            double RSquared = (spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
+            double RSquared = spatialLinearRegression.R2(); //(spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
 
             // 3. KS statistics
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
-            double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2)), 2d);
-
+            double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks1) + 0.1 * (ks1 + ks1)/2)), 2d); //Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2)), 2d);
             return RSquared + DSquared;
         };
 
@@ -339,7 +344,7 @@ public class SR4RC extends Worker {
             } else if (evolverType.equals("cmaes")) {
                 solutions = cmaesEvolver.solve(
                         Misc.cached(problem.getFitnessFunction(), cacheSize),
-                        new Iterations(iterations),
+                        new Births(birth),
                         new Random(randomSeed),
                         executorService,
                         listener
