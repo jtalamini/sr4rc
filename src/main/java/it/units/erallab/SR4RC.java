@@ -99,8 +99,12 @@ public class SR4RC extends Worker {
                 return 0.0;
             }));
             List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(best)));
-            avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
-            avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+            if (metrics.get(0).intValue() > 0) {
+                avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
+            }
+            if (metrics.get(1).intValue() > 0) {
+                avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+            }
         });
         String distributions = "";
         distributions += printDistribution(avalanchesSpatialExtension);
@@ -191,8 +195,12 @@ public class SR4RC extends Worker {
                 }));
                 List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
 
-                avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
-                avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+                if (metrics.get(0).intValue() > 0) {
+                    avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
+                }
+                if (metrics.get(1).intValue() > 0) {
+                    avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+                }
             });
 
             // exit condition
@@ -208,11 +216,11 @@ public class SR4RC extends Worker {
 
             // create 2 normalized distributions for each individual
             double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
-                    .mapToDouble(frequency -> frequency / (double)(gridSide * gridSide))
+                    .mapToDouble(frequency -> frequency / (double)(spatialSizeNumber))
                     .toArray();
 
             double[] temporalDistribution = Arrays.stream(avalanchesTemporalExtension)
-                    .mapToDouble(frequency -> frequency / (double)(gridSide * gridSide))
+                    .mapToDouble(frequency -> frequency / (double)(temporalSizeNumber))
                     .toArray();
 
             // compute the log-log of the 2 distributions
