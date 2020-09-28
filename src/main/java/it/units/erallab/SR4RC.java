@@ -124,7 +124,7 @@ public class SR4RC extends Worker {
         double finalT = 30;
         double pulseDuration = 0.4;
         double avalancheThreshold = d(a("avalancheThreshold", "0.0002"));
-        int binSize = 5;
+        int binSize = i(a("binSize", "5"));
         double gaussianThreshold = 0d;
         // evolutionary parameters
         int nGaussian = i(a("nGaussian", "10"));
