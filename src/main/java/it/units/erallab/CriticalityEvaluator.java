@@ -19,13 +19,12 @@ public class CriticalityEvaluator extends AbstractTask<Robot<?>, List<Double>> {
     private double threshold;
     private int binSize;
 
-    public CriticalityEvaluator(double finalT, Settings settings, double threshold, int binSize) {
+    public CriticalityEvaluator(double finalT, Settings settings, double threshold) {
         super(settings);
         this.finalT = finalT;
         this.initialPlacement = 1.0D;
         //this.threshold = 0.00001d;
         this.threshold = threshold;
-        this.binSize = binSize;
     }
 
     public List<Double> apply(Robot<?> robot, SnapshotListener listener) {
@@ -85,6 +84,6 @@ public class CriticalityEvaluator extends AbstractTask<Robot<?>, List<Double>> {
                 listener.listen(snapshot);
             }
         }
-        return List.of((double)Arrays.stream(avalanchedVoxels).sum(), (double)(avalanchesTemporalExtension/binSize + 1));
+        return List.of((double)Arrays.stream(avalanchedVoxels).sum(), (double)(avalanchesTemporalExtension));
     }
 }

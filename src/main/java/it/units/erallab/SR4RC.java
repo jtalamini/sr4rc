@@ -152,8 +152,7 @@ public class SR4RC extends Worker {
         CriticalityEvaluator criticalityEvaluator = new CriticalityEvaluator(
                 finalT, // task duration
                 new Settings(), // default settings for the physics engine
-                avalancheThreshold,
-                binSize
+                avalancheThreshold
         );
 
         Function<Robot<?>, List<Double>> task = Misc.cached(criticalityEvaluator, 10000);
