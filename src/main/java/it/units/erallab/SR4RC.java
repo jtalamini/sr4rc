@@ -131,7 +131,7 @@ public class SR4RC extends Worker {
         int gridSide = i(a("gridSize", "5"));
         double finalT = 30;
         double pulseDuration = 0.4;
-        double avalancheThreshold = d(a("avalancheThreshold", "0.0002"));
+        double avalancheThreshold = d(a("avalancheThreshold", "0.002"));
         int binSize = i(a("binSize", "5"));
         double gaussianThreshold = 0d;
         // evolutionary parameters
@@ -185,8 +185,8 @@ public class SR4RC extends Worker {
                 return 0.0;
             }
 
-            int[] avalanchesSpatialExtension = new int[bodySize + 1];
-            int[] avalanchesTemporalExtension = new int[100];
+            double[] avalanchesSpatialExtension = new double[bodySize + 1];
+            double[] avalanchesTemporalExtension = new double[100];
 
             // a pulse controller is applied on each voxel
             IntStream.range(0, (int) Math.pow(gridSide, 2d)).forEach(i -> {
@@ -219,13 +219,20 @@ public class SR4RC extends Worker {
             }
 
             // create 2 normalized distributions for each individual
+            double[] spatialDistribution = avalanchesSpatialExtension;
+            /*
             double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
                     .mapToDouble(frequency -> frequency / (double)(spatialSizeNumber))
                     .toArray();
 
+             */
+            double[] temporalDistribution = avalanchesTemporalExtension;
+            /*
             double[] temporalDistribution = Arrays.stream(avalanchesTemporalExtension)
                     .mapToDouble(frequency -> frequency / (double)(temporalSizeNumber))
                     .toArray();
+
+             */
 
             // compute the log-log of the 2 distributions
             List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
@@ -245,6 +252,7 @@ public class SR4RC extends Worker {
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
             double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks1) + 0.1 * (ks1 + ks1)/2)), 2d); //Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2)), 2d);
+            System.out.println(DSquared+RSquared);
             return RSquared + DSquared;
         };
 
