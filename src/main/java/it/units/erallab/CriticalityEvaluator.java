@@ -18,18 +18,33 @@ public class CriticalityEvaluator extends AbstractTask<Robot<?>, List<Double>> {
     private final double initialPlacement;
     private double threshold;
     private int binSize;
+    private boolean dynamicThreshold;
+
+    public CriticalityEvaluator(double finalT, Settings settings) {
+        super(settings);
+        this.finalT = finalT;
+        this.initialPlacement = 1.0D;
+        this.dynamicThreshold = true;
+    }
 
     public CriticalityEvaluator(double finalT, Settings settings, double threshold) {
         super(settings);
         this.finalT = finalT;
         this.initialPlacement = 1.0D;
-        //this.threshold = 0.00001d;
+        this.dynamicThreshold = false;
         this.threshold = threshold;
     }
 
     public List<Double> apply(Robot<?> robot, SnapshotListener listener) {
 
         int voxelGridSize = robot.getVoxels().getW()*robot.getVoxels().getH();
+
+        int voxels = (int) robot.getVoxels().values().stream().filter(Objects::nonNull).count();
+
+        if (this.dynamicThreshold) {
+            this.threshold = 0.006092750496194226 - 0.00014273597198968677 * voxels +  9.238294116972325e-07 * voxels * voxels;
+        }
+
         Object[] voxelsPreviousArea = null;
         Object[] voxelsCurrentArea;
         int[] avalanchedVoxels = new int[voxelGridSize];

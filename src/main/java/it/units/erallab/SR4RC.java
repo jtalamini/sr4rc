@@ -37,7 +37,6 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import static it.units.malelab.jgea.core.util.Args.d;
 import static it.units.malelab.jgea.core.util.Args.i;
 
 public class SR4RC extends Worker {
@@ -50,7 +49,7 @@ public class SR4RC extends Worker {
         new SR4RC(args);
     }
 
-    private double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
+    public static double computeKSStatistics(List<Point2> empiricalDistribution, LinearRegression linearRegression) {
         double theoreticalCumSum = 0.0;
         double empiricalCumSum = 0.0;
         double maxDistance = 0.0;
@@ -67,7 +66,7 @@ public class SR4RC extends Worker {
         return maxDistance;
     }
 
-    private String printDistribution(int[] distribution) {
+    private String printDistribution(double[] distribution) {
         return Arrays.stream(distribution)
                 .mapToObj(value -> ""+value)
                 .collect(Collectors.joining(" "));
@@ -88,28 +87,31 @@ public class SR4RC extends Worker {
 
         int bodySize = (int) best.values().stream().filter(Objects::nonNull).count();
 
-        int[] avalanchesSpatialExtension = new int[bodySize + 1];
-        int[] avalanchesTemporalExtension = new int[1000];
+        double[] avalanchesSpatialExtension = new double[bodySize + 1];
+        double[] avalanchesTemporalExtension = new double[1000];
         // a pulse controller is applied on each voxel
-        IntStream.range(0, (int) Math.pow(best.getW(), 2d)).forEach(i -> {
-            Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(best.getW(), best.getW(), (x, y) -> (Double t) -> {
-                if (x * best.getW() + y == i) {
-                    if (t < pulseDuration/2) {
-                        return 1.0;
-                    } else if (t < pulseDuration) {
-                        return -1.0;
+        best.stream()
+                .filter(Objects::nonNull)
+                .forEach(voxel -> {
+                    Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(best.getW(), best.getH(), (x, y) -> (Double t) -> {
+                        if (x == voxel.getX() && y == voxel.getY()) {
+                            if (t < pulseDuration/2) {
+                                return 1.0;
+                            } else if (t < pulseDuration) {
+                                return -1.0;
+                            }
+                        }
+                        return 0.0;
+                    }));
+                    List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(best)));
+
+                    if (metrics.get(0).intValue() > 0) {
+                        avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
                     }
-                }
-                return 0.0;
-            }));
-            List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(best)));
-            if (metrics.get(0).intValue() > 0) {
-                avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
-            }
-            if (metrics.get(1).intValue() > 0) {
-                avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
-            }
-        });
+                    if (metrics.get(1).intValue() > 0) {
+                        avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+                    }
+                });
         String distributions = "";
         distributions += printDistribution(avalanchesSpatialExtension);
         distributions += ":"+printDistribution(avalanchesTemporalExtension);
@@ -131,7 +133,6 @@ public class SR4RC extends Worker {
         int gridSide = i(a("gridSize", "5"));
         double finalT = 30;
         double pulseDuration = 0.4;
-        double avalancheThreshold = d(a("avalancheThreshold", "0.002"));
         int binSize = i(a("binSize", "5"));
         double gaussianThreshold = 0d;
         // evolutionary parameters
@@ -147,14 +148,11 @@ public class SR4RC extends Worker {
                 a("dir", "."),
                 a("statsFile", null)
         );
-
         // task
         CriticalityEvaluator criticalityEvaluator = new CriticalityEvaluator(
                 finalT, // task duration
-                new Settings(), // default settings for the physics engine
-                avalancheThreshold
+                new Settings() // default settings for the physics engine
         );
-
         Function<Robot<?>, List<Double>> task = Misc.cached(criticalityEvaluator, 10000);
 
         // voxel made of the soft material
@@ -180,18 +178,18 @@ public class SR4RC extends Worker {
         Problem<Grid<ControllableVoxel>, Double> problem = () -> body -> {
 
             int bodySize = (int) body.values().stream().filter(Objects::nonNull).count();
-
             if (bodySize < 2) {
                 return 0.0;
             }
-
             double[] avalanchesSpatialExtension = new double[bodySize + 1];
             double[] avalanchesTemporalExtension = new double[100];
 
             // a pulse controller is applied on each voxel
-            IntStream.range(0, (int) Math.pow(gridSide, 2d)).forEach(i -> {
-                Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(gridSide, gridSide, (x, y) -> (Double t) -> {
-                    if (x * gridSide + y == i) {
+            body.stream()
+                .filter(Objects::nonNull)
+                .forEach(voxel -> {
+                    Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(body.getW(), body.getH(), (x, y) -> (Double t) -> {
+                    if (x == voxel.getX() && y == voxel.getY()) {
                         if (t < pulseDuration/2) {
                             return 1.0;
                         } else if (t < pulseDuration) {
@@ -201,7 +199,6 @@ public class SR4RC extends Worker {
                     return 0.0;
                 }));
                 List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
-
                 if (metrics.get(0).intValue() > 0) {
                     avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
                 }
@@ -209,50 +206,32 @@ public class SR4RC extends Worker {
                     avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
                 }
             });
-
             // exit condition
             int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension).filter(frequency -> frequency > 0).count();
             int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension).filter(frequency -> frequency > 0).count();
-
             if (spatialSizeNumber < 2 || temporalSizeNumber < 2) {
                 return 0.0;
             }
-
-            // create 2 normalized distributions for each individual
-            double[] spatialDistribution = avalanchesSpatialExtension;
-            /*
-            double[] spatialDistribution =  Arrays.stream(avalanchesSpatialExtension)
-                    .mapToDouble(frequency -> frequency / (double)(spatialSizeNumber))
-                    .toArray();
-
-             */
-            double[] temporalDistribution = avalanchesTemporalExtension;
-            /*
-            double[] temporalDistribution = Arrays.stream(avalanchesTemporalExtension)
-                    .mapToDouble(frequency -> frequency / (double)(temporalSizeNumber))
-                    .toArray();
-
-             */
-
             // compute the log-log of the 2 distributions
-            List<Point2> logLogSpatialDistribution = IntStream.range(1, spatialDistribution.length)
-                    .mapToObj(i -> Point2.build(Math.log10(i), spatialDistribution[i] > 0.0 ? Math.log10(spatialDistribution[i]) : 0))
+            List<Point2> logLogSpatialDistribution = IntStream.range(1, avalanchesSpatialExtension.length)
+                    .mapToObj(i -> Point2.build(Math.log10(i), avalanchesSpatialExtension[i] > 0.0 ? Math.log10(avalanchesSpatialExtension[i]) : 0))
                     .collect(Collectors.toList());
 
-            List<Point2> logLogTemporalDistribution = IntStream.range(1, temporalDistribution.length)
-                    .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), temporalDistribution[i] > 0.0 ? Math.log10(temporalDistribution[i]) : 0))
+            List<Point2> logLogTemporalDistribution = IntStream.range(1, avalanchesTemporalExtension.length)
+                    .mapToObj(i -> Point2.build(Math.log10((i+1) * binSize), avalanchesTemporalExtension[i] > 0.0 ? Math.log10(avalanchesTemporalExtension[i]) : 0))
                     .collect(Collectors.toList());
 
             // linear regression of the log-log distribution
             LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
             LinearRegression temporalLinearRegression = new LinearRegression(logLogTemporalDistribution);
-            double RSquared = spatialLinearRegression.R2(); //(spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
-
+            double RSquared = 0;
+            if (!Double.isNaN(spatialLinearRegression.R2())) {
+                RSquared = spatialLinearRegression.R2(); //(spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
+            }
             // 3. KS statistics
             double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
             double ks2 = computeKSStatistics(logLogTemporalDistribution, temporalLinearRegression);
             double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks1) + 0.1 * (ks1 + ks1)/2)), 2d); //Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks2) + 0.1 * (ks1 + ks2)/2)), 2d);
-            System.out.println(DSquared+RSquared);
             return RSquared + DSquared;
         };
 
@@ -261,7 +240,9 @@ public class SR4RC extends Worker {
             if (g.asBitSet().stream().sum() == 0) {
                 return null;
             }
-            return Utils.gridLargestConnected(Grid.create(gridSide, gridSide, (x, y) -> g.get(gridSide * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
+            Grid<ControllableVoxel> body = Utils.gridLargestConnected(Grid.create(gridSide, gridSide, (x, y) -> g.get(gridSide * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
+            body = Utils.cropGrid(body, Objects::nonNull);
+            return body;
         };
 
         // gaussian mapper
@@ -290,6 +271,7 @@ public class SR4RC extends Worker {
             Grid<ControllableVoxel> body = Grid.create(gridSide, gridSide, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
             //find largest connected and crop
             body = Utils.gridLargestConnected(body, Objects::nonNull);
+            body = Utils.cropGrid(body, Objects::nonNull);
             return body;
         };
 
