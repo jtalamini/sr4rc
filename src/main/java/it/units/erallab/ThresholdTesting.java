@@ -17,7 +17,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.EnumSet;
 import java.util.List;
 
-public class ThresholdValidator {
+public class ThresholdTesting {
 
     public static void main(String[] args) throws IOException {
 
@@ -31,7 +31,7 @@ public class ThresholdValidator {
 
         double deltaTau = (maxThreshold - minThreshold)/10;
 
-        Path path = Paths.get("threshold_validator.txt");
+        Path path = Paths.get("threshold_testing.txt");
         Files.write(path, List.of("grid.side;tau;spatial.size;x;y"), StandardCharsets.UTF_8);
 
         final ControllableVoxel softMaterial = new ControllableVoxel(

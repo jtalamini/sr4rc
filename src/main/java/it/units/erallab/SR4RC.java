@@ -25,9 +25,7 @@ import it.units.malelab.jgea.core.selector.Worst;
 import it.units.malelab.jgea.core.util.Misc;
 import it.units.malelab.jgea.representation.sequence.FixedLengthListFactory;
 import it.units.malelab.jgea.representation.sequence.UniformCrossover;
-import it.units.malelab.jgea.representation.sequence.bit.BitFlipMutation;
-import it.units.malelab.jgea.representation.sequence.bit.BitString;
-import it.units.malelab.jgea.representation.sequence.bit.BitStringFactory;
+import it.units.malelab.jgea.representation.sequence.numeric.GaussianMutation;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
 import org.dyn4j.dynamics.Settings;
@@ -37,6 +35,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
 import static it.units.malelab.jgea.core.util.Args.i;
 
 public class SR4RC extends Worker {
@@ -72,7 +71,7 @@ public class SR4RC extends Worker {
                 .collect(Collectors.joining(" "));
     }
 
-    private String printBody(Grid<ControllableVoxel> bestBody) {
+    private String bodyToString(Grid<ControllableVoxel> bestBody) {
         String bestBodyString = "";
         for (int y = 0; y < bestBody.getH(); y++) {
             for (int x = 0; x < bestBody.getW(); x++) {
@@ -134,13 +133,13 @@ public class SR4RC extends Worker {
         double finalT = 30;
         double pulseDuration = 0.4;
         int binSize = i(a("binSize", "5"));
-        double gaussianThreshold = 0d;
+        int robotVoxels = i(a("robotVoxels", "20"));
         // evolutionary parameters
         int nGaussian = i(a("nGaussian", "10"));
         String evolverType = a("evolver", "direct");
-        int popSize = 500;
-        int iterations = 100;
-        int birth = 5000;
+        int popSize = i(a("popSize", "500"));
+        int iterations = i(a("iterations", "100"));
+        int birth = i(a("births", "5000"));
         double mutationProb = 0.01;
         int tournamentSize = 10;
 
@@ -236,12 +235,21 @@ public class SR4RC extends Worker {
         };
 
         // direct mapper
-        Function<BitString, Grid<ControllableVoxel>> directMapper = g -> {
-            if (g.asBitSet().stream().sum() == 0) {
-                return null;
+        Function<List<Double>, Grid<ControllableVoxel>> directMapper = g -> {
+            Grid<ControllableVoxel> body = null;
+            // ordered grid
+            List<Double> thresholds = g.stream().distinct().sorted().collect(Collectors.toList());
+            Collections.reverse(thresholds);
+            for (double directThreshold : thresholds) {
+                // build grid with fixed number of voxels and dynamic threshold
+                body = Utils.gridLargestConnected(Grid.create(gridSide, gridSide, (x, y) -> g.get(gridSide * x + y) > directThreshold ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
+                // find largest connected and crop
+                body = Utils.gridLargestConnected(body, Objects::nonNull);
+                body = Utils.cropGrid(body, Objects::nonNull);
+                if (body.values().stream().filter(Objects::nonNull).count() >= robotVoxels) {
+                    break;
+                }
             }
-            Grid<ControllableVoxel> body = Utils.gridLargestConnected(Grid.create(gridSide, gridSide, (x, y) -> g.get(gridSide * x + y) ? SerializationUtils.clone(softMaterial) : null), Objects::nonNull);
-            body = Utils.cropGrid(body, Objects::nonNull);
             return body;
         };
 
@@ -251,14 +259,14 @@ public class SR4RC extends Worker {
             double epsilon = 0.0001;
             int c = 0;
             for (int j = 0; j < nGaussian; j++) {
-                //extract parameter of the j-th gaussian for the i-th material
+                // extract parameter of the j-th gaussian for the i-th material
                 double muX = g.get(c + 0);
                 double muY = g.get(c + 1);
                 double sigmaX = Math.max(0d, g.get(c + 2)) + epsilon;
                 double sigmaY =  Math.max(0d, g.get(c + 3)) + epsilon;
                 double weight = g.get(c + 4) * 2d -1;
                 c = c + 5;
-                //compute over grid
+                // compute over grid
                 for (int ix = 0; ix < gridSide; ix++) {
                     for (int iy = 0; iy < gridSide; iy++) {
                         double x = (double)ix/(double)gridSide;
@@ -267,23 +275,32 @@ public class SR4RC extends Worker {
                     }
                 }
             }
-            //build grid with material index
-            Grid<ControllableVoxel> body = Grid.create(gridSide, gridSide, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
-            //find largest connected and crop
-            body = Utils.gridLargestConnected(body, Objects::nonNull);
-            body = Utils.cropGrid(body, Objects::nonNull);
+            Grid<ControllableVoxel> body = null;
+            // ordered grid
+            List<Double> thresholds = gaussianGrid.values().stream().distinct().sorted().collect(Collectors.toList());
+            Collections.reverse(thresholds);
+            for (double gaussianThreshold : thresholds) {
+                // build grid with fixed number of voxels and dynamic threshold
+                body = Grid.create(gridSide, gridSide, (x, y) -> gaussianGrid.get(x, y) > gaussianThreshold ? SerializationUtils.clone(softMaterial) : null);
+                // find largest connected and crop
+                body = Utils.gridLargestConnected(body, Objects::nonNull);
+                body = Utils.cropGrid(body, Objects::nonNull);
+                if (body.values().stream().filter(Objects::nonNull).count() >= robotVoxels) {
+                    break;
+                }
+            }
             return body;
         };
 
         // old evolver
-        Evolver<BitString, Grid<ControllableVoxel>, Double> directEvolver = new StandardEvolver<>(
+        Evolver<List<Double>, Grid<ControllableVoxel>, Double> directEvolver = new StandardEvolver<>(
                 directMapper,
-                new BitStringFactory(gridSide * gridSide),
+                new FixedLengthListFactory<>(gridSide * gridSide, new UniformDoubleFactory(0, 1)),
                 PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
                 popSize, // pop size
                 Map.of(
-                        new BitFlipMutation(mutationProb), 0.2d,
-                        new UniformCrossover<>(new BitStringFactory(gridSide * gridSide)), 0.8d
+                        new GaussianMutation(mutationProb), 0.2d,
+                        new UniformCrossover<>(new FixedLengthListFactory<>(gridSide * gridSide, new UniformDoubleFactory(0, 1))), 0.8d
                 ),
                 new Tournament(tournamentSize), // depends on pop size
                 new Worst(), // worst individual dies
@@ -308,7 +325,7 @@ public class SR4RC extends Worker {
                 new FunctionOfOneBest<>(i -> List.of(
                         new Item("serialized.grid", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s"),
                         new Item("distributions", testBest(i.getSolution(), pulseDuration, criticalityEvaluator, binSize), "%s"),
-                        new Item("body", printBody(i.getSolution()), "%s")
+                        new Item("body", bodyToString(i.getSolution()), "%s")
                 ))
         );
 
