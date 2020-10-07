@@ -60,7 +60,7 @@ public class PowerLawEvolution extends Worker {
                 RSquared = lr.R2(); //(spatialLinearRegression.R2() + temporalLinearRegression.R2())/2;
             }
             // KS statistics
-            double ks = SR4RC.computeKSStatistics(logLogEmpiricalValues, lr);
+            double ks = BodyOptimization.computeKSStatistics(logLogEmpiricalValues, lr);
             double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks, ks) + 0.1 * (ks + ks)/2)), 2d);
             //System.out.println(RSquared+DSquared);
             return RSquared + DSquared + Math.min(1, (empiricalFrequencies.get(0) - empiricalFrequencies.get(empiricalFrequencies.size()-1)));

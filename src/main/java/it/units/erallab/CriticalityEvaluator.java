@@ -17,7 +17,6 @@ public class CriticalityEvaluator extends AbstractTask<Robot<?>, List<Double>> {
     private final double finalT;
     private final double initialPlacement;
     private double threshold;
-    private int binSize;
     private boolean dynamicThreshold;
 
     public CriticalityEvaluator(double finalT, Settings settings) {

@@ -1,6 +1,6 @@
 <component name="ArtifactManager">
-  <artifact type="jar" name="sr4rc:jar">
-    <output-path>$PROJECT_DIR$/out/artifacts/sr4rc_jar</output-path>
+  <artifact type="jar" name="brain:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/brain_jar</output-path>
     <root id="archive" name="sr4rc.jar">
       <element id="module-output" name="sr4rc" />
       <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/jcodec/jcodec-javase/0.2.3/jcodec-javase-0.2.3.jar" path-in-jar="/" />
