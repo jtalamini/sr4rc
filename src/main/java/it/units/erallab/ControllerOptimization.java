@@ -1,11 +1,14 @@
 package it.units.erallab;
 
-import com.google.common.collect.Lists;
+import it.units.erallab.hmsrobots.core.controllers.CentralizedSensing;
 import it.units.erallab.hmsrobots.core.controllers.Controller;
+import it.units.erallab.hmsrobots.core.controllers.MultiLayerPerceptron;
 import it.units.erallab.hmsrobots.core.controllers.TimeFunctions;
 import it.units.erallab.hmsrobots.core.objects.ControllableVoxel;
 import it.units.erallab.hmsrobots.core.objects.Robot;
-import it.units.erallab.hmsrobots.tasks.Locomotion;
+import it.units.erallab.hmsrobots.core.objects.SensingVoxel;
+import it.units.erallab.hmsrobots.core.objects.Voxel;
+import it.units.erallab.hmsrobots.core.sensors.*;
 import it.units.erallab.hmsrobots.util.Grid;
 import it.units.erallab.hmsrobots.util.Point2;
 import it.units.malelab.jgea.Worker;
@@ -13,25 +16,21 @@ import it.units.malelab.jgea.core.Individual;
 import it.units.malelab.jgea.core.Problem;
 import it.units.malelab.jgea.core.evolver.CMAESEvolver;
 import it.units.malelab.jgea.core.evolver.Evolver;
-import it.units.malelab.jgea.core.evolver.StandardEvolver;
 import it.units.malelab.jgea.core.evolver.stopcondition.Births;
-import it.units.malelab.jgea.core.evolver.stopcondition.Iterations;
 import it.units.malelab.jgea.core.listener.Listener;
 import it.units.malelab.jgea.core.listener.MultiFileListenerFactory;
 import it.units.malelab.jgea.core.listener.collector.*;
 import it.units.malelab.jgea.core.order.PartialComparator;
-import it.units.malelab.jgea.core.selector.Tournament;
-import it.units.malelab.jgea.core.selector.Worst;
 import it.units.malelab.jgea.core.util.Misc;
 import it.units.malelab.jgea.representation.sequence.FixedLengthListFactory;
-import it.units.malelab.jgea.representation.sequence.UniformCrossover;
-import it.units.malelab.jgea.representation.sequence.numeric.GaussianMutation;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
-import org.dyn4j.dynamics.Settings;
+
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
+import java.util.stream.IntStream;
+
 import static it.units.malelab.jgea.core.util.Args.i;
 
 public class ControllerOptimization extends Worker {
@@ -89,7 +88,8 @@ public class ControllerOptimization extends Worker {
     }
 
     public void run() {
-        String bodyType = a("bodyType", "box");
+        String bodyType = a("bodyType", "serialized");
+        String controller = a("controller", "centralized");
         int robotIndex = i(a("robotIndex", "0"));
         int gridW = i(a("gridW", "5"));
         int gridH = i(a("gridH", "4"));
@@ -98,10 +98,6 @@ public class ControllerOptimization extends Worker {
         Random random = new Random(randomSeed);
         int cacheSize = 10000;
         int births = i(a("births", "5000"));
-        int popSize = i(a("popSize","1000"));
-        int iterations = i(a("iterations", "200"));
-        double mutationProb = 0.01;
-        int tournamentSize = 10;
         String taskType = a("taskType", "locomotion");
 
         Grid<ControllableVoxel> body;
@@ -126,49 +122,69 @@ public class ControllerOptimization extends Worker {
             body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
         }
 
-        MultiFileListenerFactory<Object, Controller<ControllableVoxel>, Double> statsListenerFactory = new MultiFileListenerFactory<>(
+        MultiFileListenerFactory<Object, Robot<? extends Voxel>, Double> statsListenerFactory = new MultiFileListenerFactory<>(
                 a("dir", "."),
                 a("statsFile", null)
         );
 
-        Function<Robot<?>, List<Double>> task = null;
+        Function<?, ?> task = null;
 
         if (taskType.equals("locomotion")) {
-            Locomotion locomotion = new Locomotion(
-                    20,
-                    Locomotion.createTerrain("flat"),
-                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_RELATIVE_VELOCITY),
-                    new Settings()
-            );
-            task = Misc.cached(locomotion, 10000);
+            task = Misc.cached(ControllerOptimizationTask.locomotion, 10000);
+        } else if (taskType.equals("hiking")) {
+            task = Misc.cached(ControllerOptimizationTask.hiking, 10000);
+        } else if (taskType.equals("stairway")) {
+            task = Misc.cached(ControllerOptimizationTask.stairway, 10000);
         } else if (taskType.equals("jump")) {
-            Jump jump = new Jump(
-                    20,
-                    Jump.createTerrain("bowl"),
-                    25.0,
-                    Lists.newArrayList(Jump.Metric.CENTER_JUMP),
-                    new Settings()
-            );
-            task = Misc.cached(jump, 10000);
+            task = Misc.cached(ControllerOptimizationTask.jump, 10000);
         }
 
-        Function<Robot<?>, List<Double>> finalTask = task;
-        Problem<Controller<ControllableVoxel>, Double> problem = () -> brain -> {
-            Robot<ControllableVoxel> robot = new Robot<>(brain, SerializationUtils.clone(body));
-            List<Double> results = finalTask.apply(robot);
+        Function<Robot<? extends Voxel>, ?> finalTask = (Function<Robot<? extends Voxel>, ?>) task;
+        Problem<Robot<? extends Voxel>, Double> problem = () -> robot -> {
+            List<Double> results = (List<Double>) finalTask.apply(robot);
             return results.get(0);
         };
 
-        Function<List<Double>, Controller<ControllableVoxel>> mapper = g -> {
-            // each element of g becomes a phase
-            Controller<ControllableVoxel> brain = new TimeFunctions(
-                    Grid.create(body.getW(), body.getH(), (x, y) -> (Double t) -> Math.sin(-2 * Math.PI * t + Math.PI * g.get(x + y * body.getW())))
-            );
-            return brain;
+        Function<List<Double>, Robot<? extends Voxel>> mapper = g -> {
+            Controller<? extends Voxel> brain = null;
+            Robot<? extends Voxel> robot = null;
+            if (controller.equals("phase")) {
+                // each element of g becomes a phase
+                brain = new TimeFunctions(
+                        Grid.create(body.getW(), body.getH(), (x, y) -> (Double t) -> Math.sin(-2 * Math.PI * t + Math.PI * g.get(x + y * body.getW())))
+                );
+                robot = new Robot<>((Controller<? super ControllableVoxel>) brain, SerializationUtils.clone(body));
+            } else if (controller.equals("centralized")) {
+                // convert body to sensing body
+                Grid<SensingVoxel> sensingBody = Grid.create(body.getW(), body.getH(), (x, y) -> {
+                    SensingVoxel sensingVoxel = null;
+                    if (body.get(x, y) != null) {
+                        sensingVoxel = new SensingVoxel(List.of(
+                                new Touch(),
+                                new Normalization(new Velocity(true, 5d, Velocity.Axis.X, Velocity.Axis.Y)),
+                                new Normalization(new AreaRatio())
+                                ));
+                    }
+                    return sensingVoxel;
+                });
+                CentralizedSensing centralizedBrain  = new CentralizedSensing<>(SerializationUtils.clone(sensingBody));
+                MultiLayerPerceptron mlp = new MultiLayerPerceptron(
+                        MultiLayerPerceptron.ActivationFunction.TANH,
+                        centralizedBrain .nOfInputs(),
+                        new int[]{(int) (centralizedBrain.nOfInputs() * 0.65d)}, // hidden layers
+                        centralizedBrain .nOfOutputs()
+                );
+                double[] ws = mlp.getParams();
+                IntStream.range(0, ws.length).forEach(i -> ws[i] = random.nextGaussian());
+                mlp.setParams(ws);
+                centralizedBrain.setFunction(mlp);
+                robot = new Robot<>(centralizedBrain, SerializationUtils.clone(sensingBody));
+            }
+            return robot;
         };
 
         // CMA-ES evolver: https://en.wikipedia.org/wiki/CMA-ES
-        Evolver<List<Double>, Controller<ControllableVoxel>, Double> evolver = new CMAESEvolver<>(
+        Evolver<List<Double>, Robot<? extends Voxel>, Double> evolver = new CMAESEvolver<>(
                 mapper,
                 new FixedLengthListFactory<>(body.getW() * body.getH(), new UniformDoubleFactory(0, 1)),
                 PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness),
@@ -176,51 +192,22 @@ public class ControllerOptimization extends Worker {
                 1
         );
 
-         /*
-        // standard evolver
-        Evolver<List<Double>, Controller<ControllableVoxel>, Double> evolver = new StandardEvolver<>(
-                mapper,
-                new FixedLengthListFactory<>(body.getW() * body.getH(), new UniformDoubleFactory(0, 1)),
-                PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
-                popSize, // pop size
-                Map.of(
-                        new GaussianMutation(mutationProb), 0.2d,
-                        new UniformCrossover<>(new FixedLengthListFactory<>(body.getW() * body.getH(), new UniformDoubleFactory(0, 1))), 0.8d
-                ),
-                new Tournament(tournamentSize), // depends on pop size
-                new Worst(), // worst individual dies
-                popSize,
-                true
-        );
-
-          */
-
-        List<DataCollector<?, ? super Controller<ControllableVoxel>, ? super Double>> collectors = List.of(
+        List<DataCollector<?, ? super Robot<? extends Voxel>, ? super Double>> collectors = List.of(
                 new Basic(),
                 new Population(),
                 new Diversity(),
                 new BestInfo("%6.4f"),
                 new FunctionOfOneBest<>(i -> List.of(
-                        new Item("serialized.controller", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s")
+                        new Item("serialized.robot", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s")
                 ))
         );
-        Listener<? super Object, ? super Controller<ControllableVoxel>, ? super Double> listener;
+        Listener<? super Object, ? super Robot<? extends Voxel>, ? super Double> listener;
         if (statsListenerFactory.getBaseFileName() == null) {
             listener = listener(collectors.toArray(DataCollector[]::new));
         } else {
             listener = statsListenerFactory.build(collectors.toArray(DataCollector[]::new));
         }
         try {
-            /*
-            evolver.solve(
-                    Misc.cached(problem.getFitnessFunction(), cacheSize),
-                    new Iterations(iterations),
-                    new Random(randomSeed),
-                    executorService,
-                    listener
-            );
-
-             */
             evolver.solve(
                     Misc.cached(problem.getFitnessFunction(), cacheSize),
                     new Births(births),

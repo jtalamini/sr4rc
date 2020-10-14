@@ -58,6 +58,15 @@ public class Jump extends AbstractTask<Robot<?>, List<Double>> {
         robot.translate(new Vector2(0.0D, 1.0D - minYGap));
         robot.addTo(world);
         worldObjects.add(robot);
+
+        // wait for 10 secs before simulation
+        double transitory = 10.0;
+        double transitoryStep = 0.0D;
+        while (transitoryStep < transitory) {
+            transitoryStep += this.settings.getStepFrequency();
+            world.step(1);
+        }
+
         double t = 0.0D;
         while(t < this.finalT) {
             t += this.settings.getStepFrequency();
@@ -74,17 +83,15 @@ public class Jump extends AbstractTask<Robot<?>, List<Double>> {
 
         while(var15.hasNext()) {
             it.units.erallab.Jump.Metric metric = (it.units.erallab.Jump.Metric)var15.next();
-            double var10000;
+            double value = 0;
             switch(metric) {
                 case CENTER_JUMP:
-                    var10000 = centerPositions.stream().mapToDouble((p) -> {
-                        return p.y;
-                    }).max().orElse(0.0D) - centerPositions.get(0).y;
+                    double maxY = centerPositions.stream().mapToDouble(p -> p.y).max().orElse(0.0D);
+                    value = (maxY - centerPositions.get(0).y) / Math.max(boundingBox.max.x - boundingBox.min.x, boundingBox.max.y - boundingBox.min.y);
                     break;
                 default:
                     throw new IllegalStateException("Unexpected value: " + metric);
             }
-            double value = var10000;
             results.add(value);
         }
         return results;
