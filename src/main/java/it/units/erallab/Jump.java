@@ -1,5 +1,6 @@
 package it.units.erallab;
 
+import it.units.erallab.hmsrobots.core.objects.ControllableVoxel;
 import it.units.erallab.hmsrobots.core.objects.Ground;
 import it.units.erallab.hmsrobots.core.objects.Robot;
 import it.units.erallab.hmsrobots.core.objects.WorldObject;
@@ -67,11 +68,24 @@ public class Jump extends AbstractTask<Robot<?>, List<Double>> {
             world.step(1);
         }
 
+        double maxYTime = 0.0;
+        double maxY = 0.0;
+        double controlEnergy = 0.0;
+
         double t = 0.0D;
         while(t < this.finalT) {
             t += this.settings.getStepFrequency();
             world.step(1);
             robot.act(t);
+            if (robot.getCenter().y > maxY) {
+                maxY = robot.getCenter().y;
+                maxYTime = t;
+
+                controlEnergy = robot.getVoxels().values().stream().filter((v) -> {
+                    return v instanceof ControllableVoxel;
+                }).mapToDouble(ControllableVoxel::getControlEnergy).sum() / maxYTime;
+
+            }
             centerPositions.add(Point2.build(robot.getCenter()));
             if (listener != null) {
                 Snapshot snapshot = new Snapshot(t, (Collection)worldObjects.stream().map(WorldObject::immutable).collect(Collectors.toList()));
@@ -86,8 +100,10 @@ public class Jump extends AbstractTask<Robot<?>, List<Double>> {
             double value = 0;
             switch(metric) {
                 case CENTER_JUMP:
-                    double maxY = centerPositions.stream().mapToDouble(p -> p.y).max().orElse(0.0D);
-                    value = (maxY - centerPositions.get(0).y) / Math.max(boundingBox.max.x - boundingBox.min.x, boundingBox.max.y - boundingBox.min.y);
+                    value = (centerPositions.stream().mapToDouble(p -> p.y).max().orElse(0.0D) - centerPositions.get(0).y);
+                    break;
+                case CONTROL_POWER:
+                    value = controlEnergy;
                     break;
                 default:
                     throw new IllegalStateException("Unexpected value: " + metric);
@@ -119,7 +135,7 @@ public class Jump extends AbstractTask<Robot<?>, List<Double>> {
             return new double[][]{{0.0D, 10.0D, 1990.0D, 2000.0D}, {100.0D, 0.0D, 0.0D, 100.0D}};
 
         } else if (name.equals("bowl")) {
-            return new double[][]{{0.0D, 10.0D, 20.0D, 60.0D, 70.0D, 80.0D}, {100.0D, 10.0D, 0.0D, 0.0D, 10.0D, 100.0D}};
+            return new double[][]{{0.0D, 1.0D, 35.0D, 36.0D, }, {100.0D, 0.0D, 0.0D, 100.0D}};
         } else if (name.startsWith("uneven")) {
             int h = Integer.parseInt(name.replace("uneven", ""));
             return randomTerrain(50, 2000.0D, (double)h, 100.0D, random);
@@ -133,7 +149,8 @@ public class Jump extends AbstractTask<Robot<?>, List<Double>> {
     }
 
     public static enum Metric {
-        CENTER_JUMP(true);
+        CENTER_JUMP(true),
+        CONTROL_POWER(true);
 
         private final boolean toMinimize;
 

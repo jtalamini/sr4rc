@@ -1,9 +1,14 @@
 package it.units.erallab;
 
 import java.io.*;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
+import java.util.Random;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -21,8 +26,8 @@ public class Utils {
 
   public static String safelySerialize(Serializable object) {
     try (
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ObjectOutputStream oos = new ObjectOutputStream(new GZIPOutputStream(baos, true))
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ObjectOutputStream oos = new ObjectOutputStream(new GZIPOutputStream(baos, true))
     ) {
       oos.writeObject(object);
       oos.flush();
@@ -36,8 +41,8 @@ public class Utils {
 
   public static <T> T safelyDeserialize(String string, Class<T> tClass) {
     try (
-        ByteArrayInputStream bais = new ByteArrayInputStream(Base64.getDecoder().decode(string));
-        ObjectInputStream ois = new ObjectInputStream(new GZIPInputStream(bais))
+            ByteArrayInputStream bais = new ByteArrayInputStream(Base64.getDecoder().decode(string));
+            ObjectInputStream ois = new ObjectInputStream(new GZIPInputStream(bais))
     ) {
       Object o = ois.readObject();
       return (T) o;
@@ -47,4 +52,38 @@ public class Utils {
     }
   }
 
+  public static double[][] createHillyTerrain(String name) {
+
+    double TERRAIN_BORDER_HEIGHT = 100d;
+    int TERRAIN_LENGHT = 2000;
+
+    String hilly = "hilly-(?<h>[0-9]+(\\.[0-9]+)?)-(?<w>[0-9]+(\\.[0-9]+)?)-(?<seed>[0-9]+)";
+    if (name.matches(hilly)) {
+      double h = Double.parseDouble(paramValue(hilly, name, "h"));
+      double w = Double.parseDouble(paramValue(hilly, name, "w"));
+      Random random = new Random(Integer.parseInt(paramValue(hilly, name, "seed")));
+      List<Double> xs = new ArrayList<>(List.of(0d, 10d));
+      List<Double> ys = new ArrayList<>(List.of(TERRAIN_BORDER_HEIGHT, 0d));
+      while (xs.get(xs.size() - 1) < TERRAIN_LENGHT) {
+        xs.add(xs.get(xs.size() - 1) + Math.max(1d, (random.nextGaussian() * 0.25 + 1) * w));
+        ys.add(ys.get(ys.size() - 1) + random.nextGaussian() * h);
+      }
+      xs.addAll(List.of(xs.get(xs.size() - 1) + 10, xs.get(xs.size() - 1) + 20));
+      ys.addAll(List.of(0d, TERRAIN_BORDER_HEIGHT));
+      return new double[][]{
+              xs.stream().mapToDouble(d -> d).toArray(),
+              ys.stream().mapToDouble(d -> d).toArray()
+      };
+    }
+    throw new IllegalArgumentException(String.format("Unknown terrain name: %s", name));
+  }
+
+  private static String paramValue(String pattern, String string, String paramName) {
+    Matcher matcher = Pattern.compile(pattern).matcher(string);
+    if (matcher.matches()) {
+      return matcher.group(paramName);
+    }
+    throw new IllegalStateException(String.format("Param %s not found in %s with pattern %s", paramName, string, pattern));
+  }
 }
+

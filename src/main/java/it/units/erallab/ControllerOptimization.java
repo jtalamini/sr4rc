@@ -1,5 +1,6 @@
 package it.units.erallab;
 
+import com.google.common.collect.Lists;
 import it.units.erallab.hmsrobots.core.controllers.CentralizedSensing;
 import it.units.erallab.hmsrobots.core.controllers.Controller;
 import it.units.erallab.hmsrobots.core.controllers.MultiLayerPerceptron;
@@ -9,6 +10,7 @@ import it.units.erallab.hmsrobots.core.objects.Robot;
 import it.units.erallab.hmsrobots.core.objects.SensingVoxel;
 import it.units.erallab.hmsrobots.core.objects.Voxel;
 import it.units.erallab.hmsrobots.core.sensors.*;
+import it.units.erallab.hmsrobots.tasks.Locomotion;
 import it.units.erallab.hmsrobots.util.Grid;
 import it.units.erallab.hmsrobots.util.Point2;
 import it.units.malelab.jgea.Worker;
@@ -25,7 +27,7 @@ import it.units.malelab.jgea.core.util.Misc;
 import it.units.malelab.jgea.representation.sequence.FixedLengthListFactory;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
-
+import org.dyn4j.dynamics.Settings;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
@@ -91,22 +93,42 @@ public class ControllerOptimization extends Worker {
         String bodyType = a("bodyType", "serialized");
         String controller = a("controller", "centralized");
         int robotIndex = i(a("robotIndex", "0"));
-        int gridW = i(a("gridW", "5"));
-        int gridH = i(a("gridH", "4"));
+        int gridW = i(a("gridW", "20"));
+        int gridH = i(a("gridH", "20"));
         int robotVoxels = i(a("robotVoxels", "20"));
         int randomSeed = i(a("randomSeed", "666"));
         Random random = new Random(randomSeed);
         int cacheSize = 10000;
-        int births = i(a("births", "5000"));
-        String taskType = a("taskType", "locomotion");
+        double time = 20;
+        int births = i(a("births", "20000"));
+        String taskType = a("taskType", "hiking");
 
         Grid<ControllableVoxel> body;
 
         if (bodyType.equals("random")) {
-            body = generateRandomBody(robotVoxels, Math.max(gridW, gridH), random, Material.softMaterial);
+            body = generateRandomBody(robotVoxels, Math.max(gridW, gridH), random, new ControllableVoxel());
         } else if (bodyType.equals("box")) {
-            body = Grid.create(gridW, gridH, (x,y) -> SerializationUtils.clone(Material.softMaterial));
-        } else {
+            body = Grid.create(gridW, gridH, (x, y) -> SerializationUtils.clone(new ControllableVoxel()));
+        } else if (bodyType.equals("worm")) {
+            body = Grid.create(10, 2, (x, y) -> SerializationUtils.clone(new ControllableVoxel()));
+        }  else if (bodyType.equals("biped")) {
+            body = Grid.create(6,4, (x, y) -> {
+                if ((y > 1) || (x < 2 || x > 3)) {
+                    return SerializationUtils.clone(new ControllableVoxel());
+                } else {
+                    return null;
+                }
+            });
+        }  else if (bodyType.equals("reversedT")) {
+            body = Grid.create(6,6, (x, y) -> {
+                if ((y < 2) || (x > 1 && x < 4)) {
+                    return SerializationUtils.clone(new ControllableVoxel());
+                } else {
+                    return null;
+                }
+            });
+        }
+        else {
             List<String> bodies = List.of(
                     "H4sIAAAAAAAAAOxUv28TMRR+vbYktGppmoIYYCIsSM0NlZBQhjTKXUqka4tyEYJ2KG7iJK58d8Hna68dKvEHsFMEGwMDKwMSLCxFTNCO/AdISF3Y8bv8aAAJFSSkDGfp7OfPz/6+9/x8r77BuC8gw2Q2cJn0s1QQzslmtuX4wtv0FBJIxrNLgtXfn792qXDz8LUGo2UYaalvxwJN+hJmrC2yTXT01C3my1zYBoCE+s6pw9O42DmmIATZRY/w0dHVg0PyfBRGyjDmsz0abbmxM4Z9WzW18dYfVNU8QbPe5hatqUnRc6Xw0IPTu15I+fdnGx+ul29f0UAzIOmQsOSJGrVgsoHjMpUtry5hyWJSjwj0LoHeJ9CRQO8S6L8RZEqnB+VCAfNnlRrtfpcIX5w8WH2rwZQBKSIoqRDJvGUSGpRLoiQ3BKspxF2DOc4cJiMBJIJKnDQNGHOI7xswi0PBbQacCIM4beY21yCFYFHJZX7fP8Is5tK+nwFpxGxWpxZ1m7IVaTBgUlBfMhkglwETfn/dgITfFrizb5UsmO1Ydo00Gh6vK1MVRHqgIEw3cGyKNZH/BFFbvN8ZR/InHaM39o388ULU8m8OsD1dTP6ML8515li6p9XVZcrYVDDC2R7G494RXrg7njj+sl39+FnVgyoCyqlDXVndbVMJqY5UTtymXuQqIbl1SHY9VCSp9YF1JFBxbAvI/9V9Z+xfc9SNF2YBVPVMRzEgRRTD4GI7ED0Npw65l4+/zi8c6U809FCe2v5D2IdpCVN22TA3zHtVs7JSsPpo0VypVgrWRrGyatu99O8LMP/5hQ0+gEG9yHhBQtIo29XCStHEl4zY+H+4fDx3AruZAPsUJgKNNHYXe0Q4uTwcIuJcDFsuYg2xhlhDrGHIf1OxCBiioog19B5H+AMAAP//AwDdV83KQA4AAA==",
                     "H4sIAAAAAAAAAOxUz2sTQRR+3bYmtrQ2TRUPejIemxUKguSQhuymBratZINoe6jTZJJM2V/OzrbbHgr+Ad6t6M2DB68eBL14qXjS9uh/IAi9eHfeJtlGhaKCsIcM7MybN2/m+96bb/bVNxj3OeSYyAcOE36ecmJZZDPfsX3ubrrSEwhm5Zc4a74/f+1S6ebhawVGqzDSkd+OAYrwBcwYW2SbqBipGswXhdADgLT8zsnDs7jYPabEOdnFiPDR0dWDQ/J8FEaqMOazPRptubEzhr0nd906g1LD5TTvbm7RhpyUXUdwFyMsetcNqfX92caH69XbVxRQNEjbJKy4vEENmGzhuExFx20KWDKYUCMAtQegxgAqAqg9APU3gFzl9KBCyGH+T6lGu9+lwhcnD1bfKjClQYZwSmpEMHeZhBq1BJGUW5w1pMdZgzmL2UxEBEjkqlikrcGYTXxfg1kcSk47sAjXiO0xp70GGXSWJV3mx/GRz2AOjeM0yKLPZE1qUKctOhEHDSY59QUTAWJpMOHH6xqkfI/jztiqGDDbtcwGabVcqylNqYbsgBp0J7BNioIofoKoLd7vjiPFk67RH2OjeLwQteKbA2xPF9M/+xfnunPU7am0ekg5k3JGLLaH+Th3uBvujqeOv2zXP36WepAioBa1qSPqux4VkOlStYjTVsuWLEhhHdK9CJlJZn1gHQFkHtscin913znz1xr18oVZAKme6SgHhIhyGFz0At7ncBpQePn46/zCkfpEwQgZqew/hH2YFjBlVjV9Q79X12srJSP2lvWVeq1kbJRrq6bZL/8+B/2fX9jgAxjki4gXBKS1qlkvrZR1Hx3j/+Hm8dwJ7GYC7DNYBTSy2F3sA+Hk8pBDcjh4XjJYeAkhkggSyajFkEOCNDHkMOQw/EcMOZzBIRmKSAqLhDyQ8AcAAAD//wMAaSv5Js8PAAA=",
@@ -120,6 +142,13 @@ public class ControllerOptimization extends Worker {
                     "H4sIAAAAAAAAAOyVz2sTQRTHX7etjS2tTVPFg56MR7NCQZAc0pDd1MC2lWwQbQ91mkySKbM/nJ1ttz0U/AO8W9GbBw9ePQh68VLxpO3R/0AQevHuvE2yjQqigpBDBnbm7Zs38/28mbfJy68wHgjIMpkLXSaDHBWEc7KZazuB8DY95Qkl47klwRrvzl65ULxx+EqD0QqMtNWzY4EmAwmz1hbZJjpG6hYLZD7yAeCMelJq8wxOdrYpCkF2MSJ6eHT54JA8G4WRCowFbI/GS67vjGHv+2rZzd8w1T1Bc97mFq2rl5LnSuFhBKd3vIjyb0833l+t3LqkgWZAyiFR2RN1asFUE8dlKtteQ8KSxaQeC+hdAT0R0FFA7wrovwhky6cb5SMB1/4UNV79diJ6fnJ/9Y0G0wakiaCkSiTzlklkUC6JQm4KVlcedw3mOXOYjAFI7Cpz0jJgzCFBYMAcDkW3FXIiDOL4zG2tQRqdJYXLgiQ+9lnMpUmcARn02axBLeq2ZDtmMGBK0EAyGaKWAZNBMm/AROALXJlYZQvmOpZdJ82mxxvKVOWQ6SsH0w0dm2JFFD5C3BbvdcaRwknH6I2JUTheiFvh9QG2J4upH/2L8513LNzT2uoqZW0qGOFsD/Nxbwsv2h2fOP68XfvwSdWDKgLKqUNdWdv1qYR0B5UTt6WXuDqQ/DqkuhEqk/R63zwKqDy2BRT+6r6z9s9n1M0X5gBU9czEOaBEnEP/pB+KHsNpQP7Foy/XFo70xxpGqEht/wHsw4yEabtimBvm3ZpZXSlaibdkrtSqRWujVF217d7x7wsw//kL6/8A+nlR8ZyElFGxa8WVkuljC9A7/h+uH/edxG42xD6NR4FGBrvzPSF8uTiESCCGF5JADBmGDEOGIcMgMwzED+WA/GcMBsVAQAwIRdyi7wAAAP//AwApet0cRg4AAA=="
             );
             body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
+            for (int x = 0; x < body.getW(); x++) {
+                for (int y = 0; y < body.getH(); y++) {
+                    if (body.get(x, y) != null) {
+                        body.set(x, y, new ControllableVoxel());
+                    }
+                }
+            }
         }
 
         MultiFileListenerFactory<Object, Robot<? extends Voxel>, Double> statsListenerFactory = new MultiFileListenerFactory<>(
@@ -130,13 +159,33 @@ public class ControllerOptimization extends Worker {
         Function<?, ?> task = null;
 
         if (taskType.equals("locomotion")) {
-            task = Misc.cached(ControllerOptimizationTask.locomotion, 10000);
+            task = Misc.cached(new Locomotion(
+                    time,
+                    Locomotion.createTerrain("flat"),
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    new Settings()
+            ), cacheSize);
         } else if (taskType.equals("hiking")) {
-            task = Misc.cached(ControllerOptimizationTask.hiking, 10000);
-        } else if (taskType.equals("stairway")) {
-            task = Misc.cached(ControllerOptimizationTask.stairway, 10000);
+            task = Misc.cached(new Locomotion(
+                    time,
+                    Utils.createHillyTerrain("hilly-1-1-0"),
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    new Settings()
+            ), cacheSize);
+        } else if (taskType.equals("escape")) {
+            task = Misc.cached(new Escape(
+                    40.0,
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    new Settings()
+            ), cacheSize);
         } else if (taskType.equals("jump")) {
-            task = Misc.cached(ControllerOptimizationTask.jump, 10000);
+            task = Misc.cached(new Jump(
+                    time,
+                    Jump.createTerrain("bowl"),
+                    1.0,
+                    Lists.newArrayList(Jump.Metric.CENTER_JUMP),
+                    new Settings()
+            ), cacheSize);
         }
 
         Function<Robot<? extends Voxel>, ?> finalTask = (Function<Robot<? extends Voxel>, ?>) task;
@@ -196,7 +245,7 @@ public class ControllerOptimization extends Worker {
                 new Basic(),
                 new Population(),
                 new Diversity(),
-                new BestInfo("%6.4f"),
+                new BestInfo("%8.6f"),
                 new FunctionOfOneBest<>(i -> List.of(
                         new Item("serialized.robot", it.units.erallab.Utils.safelySerialize(i.getSolution()), "%s")
                 ))
