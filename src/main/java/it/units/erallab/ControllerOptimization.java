@@ -168,7 +168,7 @@ public class ControllerOptimization extends Worker {
         } else if (taskType.equals("hiking")) {
             task = Misc.cached(new Locomotion(
                     time,
-                    Utils.createHillyTerrain("hilly-1-1-0"),
+                    Utils.createHillyTerrain(1.0,1.0,0),
                     Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
                     new Settings()
             ), cacheSize);
