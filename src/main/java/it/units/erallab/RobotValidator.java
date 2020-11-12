@@ -1,27 +1,33 @@
 package it.units.erallab;
 
 import com.google.common.collect.Lists;
+import it.units.erallab.hmsrobots.core.controllers.Controller;
+import it.units.erallab.hmsrobots.core.controllers.TimeFunctions;
+import it.units.erallab.hmsrobots.core.objects.ControllableVoxel;
 import it.units.erallab.hmsrobots.core.objects.Robot;
 import it.units.erallab.hmsrobots.core.objects.Voxel;
 import it.units.erallab.hmsrobots.tasks.Locomotion;
 import it.units.erallab.hmsrobots.tasks.Task;
 import it.units.erallab.hmsrobots.util.Grid;
+import it.units.erallab.hmsrobots.util.Point2;
 import it.units.erallab.hmsrobots.viewers.*;
 import it.units.erallab.hmsrobots.viewers.drawers.Ground;
 import it.units.erallab.hmsrobots.viewers.drawers.SensorReading;
+import org.apache.commons.lang3.SerializationUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.dyn4j.dynamics.Settings;
-
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+import static it.units.erallab.BodyOptimization.computeKSStatistics;
 
 public class RobotValidator {
     static void validateGridOfRobots(List<Pair<String, Robot<? extends Voxel>>> robots, int w, int h, Task<?, ?> task, boolean video, String outputName) throws IOException {
@@ -82,7 +88,76 @@ public class RobotValidator {
         }
     }
 
-    public static void main(String[] args) throws IOException {
+    public static double validateBodyCriticality(Grid<ControllableVoxel> body) {
+        for (int x = 0; x < body.getW(); x++) {
+            for (int y = 0; y < body.getH(); y++) {
+                if (body.get(x, y) != null) {
+                    body.set(x, y, SerializationUtils.clone(Material.softMaterial));
+                }
+            }
+        }
+
+        double pulseDuration = 0.4;
+        int binSize = 5;
+        double finalT = 20;
+
+        CriticalityEvaluator task = new CriticalityEvaluator(
+                finalT, // task duration
+                new Settings() // default settings for the physics engine
+        );
+
+        int bodySize = (int) body.values().stream().filter(Objects::nonNull).count();
+        if (bodySize < 2) {
+            return 0.0;
+        }
+        double[] avalanchesSpatialExtension = new double[bodySize + 1];
+        double[] avalanchesTemporalExtension = new double[100];
+
+        // a pulse controller is applied on each voxel
+        body.stream()
+                .filter(Objects::nonNull)
+                .forEach(voxel -> {
+                    Controller<ControllableVoxel> pulseController = new TimeFunctions(Grid.create(body.getW(), body.getH(), (x, y) -> (Double t) -> {
+                        if (x == voxel.getX() && y == voxel.getY()) {
+                            if (t < pulseDuration/2) {
+                                return 1.0;
+                            } else if (t < pulseDuration) {
+                                return -1.0;
+                            }
+                        }
+                        return 0.0;
+                    }));
+                    List<Double> metrics = task.apply(new Robot<>(pulseController, SerializationUtils.clone(body)));
+                    if (metrics.get(0).intValue() > 0) {
+                        avalanchesSpatialExtension[metrics.get(0).intValue()] += 1;
+                    }
+                    if (metrics.get(1).intValue() > 0) {
+                        avalanchesTemporalExtension[(metrics.get(1).intValue()) / binSize] += 1;
+                    }
+                });
+        // exit condition
+        int spatialSizeNumber = (int) Arrays.stream(avalanchesSpatialExtension).filter(frequency -> frequency > 0).count();
+        int temporalSizeNumber = (int) Arrays.stream(avalanchesTemporalExtension).filter(frequency -> frequency > 0).count();
+        if (spatialSizeNumber < 2) { //if (spatialSizeNumber < 2 || temporalSizeNumber < 2) {
+            return 0.0;
+        }
+        // compute the log-log of the 2 distributions
+        List<Point2> logLogSpatialDistribution = IntStream.range(1, avalanchesSpatialExtension.length)
+                .mapToObj(i -> Point2.build(Math.log10(i), avalanchesSpatialExtension[i] > 0.0 ? Math.log10(avalanchesSpatialExtension[i]) : 0))
+                .collect(Collectors.toList());
+        // linear regression of the log-log distribution
+        LinearRegression spatialLinearRegression = new LinearRegression(logLogSpatialDistribution);
+        double RSquared = 0;
+        if (!Double.isNaN(spatialLinearRegression.R2())) {
+            RSquared = spatialLinearRegression.R2();
+        }
+        // 3. KS statistics
+        double ks1 = computeKSStatistics(logLogSpatialDistribution, spatialLinearRegression);
+        double DSquared = Math.pow(Math.exp(-(0.9 * Math.min(ks1, ks1) + 0.1 * (ks1 + ks1)/2)), 2d);
+        return RSquared + DSquared;
+    }
+
+    public static void visualize(String serializedRobotsFile, boolean makeVideo, String taskName) throws IOException {
 
         // old phase
         List<Pair<String, Robot<? extends Voxel>>> phaseLocomotionRobots = List.of(
@@ -108,7 +183,7 @@ public class RobotValidator {
         List<Pair<String, Robot<? extends Voxel>>> jumpRobots = new ArrayList<>();
         List<Pair<String, Robot<? extends Voxel>>> escapeRobots = new ArrayList<>();
 
-        BufferedReader csvReader = new BufferedReader(new FileReader("C:\\Users\\jacopota\\experiments\\robot\\centralized10_43_03@06-11-2020.csv"));
+        BufferedReader csvReader = new BufferedReader(new FileReader(serializedRobotsFile));
         String row;
 
         boolean firstLine = true;
@@ -127,29 +202,40 @@ public class RobotValidator {
             }
         }
         csvReader.close();
+        if (taskName.equals("locomotion")) {
+            Task<?, ?> locomotion = new Locomotion(
+                    20,
+                    Locomotion.createTerrain("flat"),
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    new Settings()
+            );
+            validateGridOfRobots(locomotionRobots, 3, 2, locomotion, false, "locomotion");
+        } else if (taskName.equals("jump")) {
+            Task<?, ?> jump = new Jump(
+                    20,
+                    Jump.createTerrain("bowl"),
+                    1.0,
+                    Lists.newArrayList(Jump.Metric.CENTER_JUMP),
+                    new Settings()
+            );
+            validateGridOfRobots(jumpRobots, 3, 2, jump, false, "jump");
+        } else if(taskName.equals("escape")) {
+            Task<?, ?> escape = new Escape(
+                    40.0,
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    new Settings()
+            );
+            validateGridOfRobots(escapeRobots, 3, 2, escape, false, "escape");
+        }
+    }
 
-        Task<?, ?> locomotion = new Locomotion(
-                20,
-                Locomotion.createTerrain("flat"),
-                Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
-                new Settings()
-        );
-        Task<?, ?> jump = new Jump(
-                20,
-                Jump.createTerrain("bowl"),
-                1.0,
-                Lists.newArrayList(Jump.Metric.CENTER_JUMP),
-                new Settings()
-        );
-        Task<?, ?> escape = new Escape(
-                40.0,
-                Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
-                new Settings()
-        );
 
 
-        //validateGridOfRobots(locomotionRobots, 3, 2, locomotion, false, "locomotion");
-        //validateGridOfRobots(jumpRobots, 3, 2, jump, false, "jump");
-        validateGridOfRobots(escapeRobots, 3, 2, escape, false, "escape");
+    public static void main(String[] args) {
+        try {
+            visualize("C:\\Users\\jacopota\\experiments\\robot\\phase-v210_40_40@11-11-2020.csv", false, "escape");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }

@@ -15,6 +15,11 @@ do
   do
     sbatch --array=0-9 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt brain.sh random $i $TASK 20 20 $CONTROLLER
   done
+  # pseudorandom robots
+  for i in {0..9}
+  do
+    sbatch --array=0-9 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt brain.sh pseudorandom $i $TASK 20 20 $CONTROLLER
+  done
   # box robots
   sbatch --array=0-9 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt brain.sh box 0 $TASK 5 4 $CONTROLLER
   # worm robot

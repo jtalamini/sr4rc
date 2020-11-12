@@ -32,6 +32,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static it.units.erallab.Utils.bodyToString;
 import static it.units.malelab.jgea.core.util.Args.i;
 
 public class BodyOptimization extends Worker {
@@ -65,17 +66,6 @@ public class BodyOptimization extends Worker {
         return Arrays.stream(distribution)
                 .mapToObj(value -> ""+value)
                 .collect(Collectors.joining(" "));
-    }
-
-    private String bodyToString(Grid<ControllableVoxel> bestBody) {
-        String bestBodyString = "";
-        for (int y = 0; y < bestBody.getH(); y++) {
-            for (int x = 0; x < bestBody.getW(); x++) {
-                bestBodyString += bestBody.get(x, y) == null ? "0" : "X";
-                bestBodyString += x == bestBody.getW()-1 ? "n " : " ";
-            }
-        }
-        return bestBodyString;
     }
 
     private String testBest(Grid<ControllableVoxel> best, double pulseDuration, CriticalityEvaluator task, int binSize) {

@@ -66,7 +66,10 @@ public class Escape extends AbstractTask<Robot<?>, List<Double>> {
 
         Ground ground = new Ground(new double[]{0, 1, 200}, new double[]{100, 0, 0});
 
-        Ceiling ceiling = new Ceiling(new double[]{0, 25, 35, 70, 200}, new double[]{35, 23, 17, 12, 7});
+        double maxY = robot.boundingBox().max.y;
+        double maxX = robot.boundingBox().max.x;
+
+        Ceiling ceiling = new Ceiling(new double[]{0, maxX*1.1, maxX*1.4, maxX*2.5, maxX*10}, new double[]{1.4*maxY, 1.4*maxY, maxY, 0.7*maxY, 0.6*maxY});
 
         ceiling.addTo(world);
         worldObjects.add(ceiling);
