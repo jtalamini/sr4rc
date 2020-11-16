@@ -17,13 +17,19 @@ import it.units.malelab.jgea.core.Individual;
 import it.units.malelab.jgea.core.Problem;
 import it.units.malelab.jgea.core.evolver.CMAESEvolver;
 import it.units.malelab.jgea.core.evolver.Evolver;
+import it.units.malelab.jgea.core.evolver.StandardEvolver;
 import it.units.malelab.jgea.core.evolver.stopcondition.Births;
+import it.units.malelab.jgea.core.evolver.stopcondition.Iterations;
 import it.units.malelab.jgea.core.listener.Listener;
 import it.units.malelab.jgea.core.listener.MultiFileListenerFactory;
 import it.units.malelab.jgea.core.listener.collector.*;
 import it.units.malelab.jgea.core.order.PartialComparator;
+import it.units.malelab.jgea.core.selector.Tournament;
+import it.units.malelab.jgea.core.selector.Worst;
 import it.units.malelab.jgea.core.util.Misc;
 import it.units.malelab.jgea.representation.sequence.FixedLengthListFactory;
+import it.units.malelab.jgea.representation.sequence.UniformCrossover;
+import it.units.malelab.jgea.representation.sequence.numeric.GaussianMutation;
 import it.units.malelab.jgea.representation.sequence.numeric.UniformDoubleFactory;
 import org.apache.commons.lang3.SerializationUtils;
 import org.dyn4j.dynamics.Settings;
@@ -128,6 +134,25 @@ public class ControllerOptimization extends Worker {
             }
         }
 
+        int genotypeSize;
+        if (controller.equals("phase")) {
+            genotypeSize = body.getW() * body.getH();
+        } else {
+            Grid<SensingVoxel> mlpBody = Grid.create(body.getW(), body.getH(), (x, y) -> {
+                SensingVoxel sensingVoxel = null;
+                if (body.get(x, y) != null) {
+                    sensingVoxel = new SensingVoxel(List.of(
+                            new Touch(),
+                            new Normalization(new Velocity(true, 5d, Velocity.Axis.X, Velocity.Axis.Y)),
+                            new Normalization(new AreaRatio())
+                    ));
+                }
+                return sensingVoxel;
+            });
+            CentralizedSensing cBrain  = new CentralizedSensing<>(SerializationUtils.clone(mlpBody));
+            genotypeSize = new MultiLayerPerceptron(MultiLayerPerceptron.ActivationFunction.TANH, cBrain.nOfInputs(), new int[]{(int) (cBrain.nOfInputs() * 0.65d)}, cBrain.nOfOutputs()).getParams().length;
+        }
+
         MultiFileListenerFactory<Object, Robot<? extends Voxel>, Double> statsListenerFactory = new MultiFileListenerFactory<>(
                 a("dir", "."),
                 a("statsFile", null)
@@ -139,20 +164,20 @@ public class ControllerOptimization extends Worker {
             task = Misc.cached(new Locomotion(
                     time,
                     Locomotion.createTerrain("flat"),
-                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY, Locomotion.Metric.CONTROL_POWER),
                     new Settings()
             ), cacheSize);
         } else if (taskType.equals("hiking")) {
             task = Misc.cached(new Locomotion(
                     time,
                     Utils.createHillyTerrain(1.0,1.0,0),
-                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY, Locomotion.Metric.CONTROL_POWER),
                     new Settings()
             ), cacheSize);
         } else if (taskType.equals("escape")) {
             task = Misc.cached(new Escape(
                     40.0,
-                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY),
+                    Lists.newArrayList(Locomotion.Metric.TRAVEL_X_VELOCITY, Locomotion.Metric.CONTROL_POWER),
                     new Settings()
             ), cacheSize);
         } else if (taskType.equals("jump")) {
@@ -160,7 +185,7 @@ public class ControllerOptimization extends Worker {
                     time,
                     Jump.createTerrain("bowl"),
                     1.0,
-                    Lists.newArrayList(Jump.Metric.CENTER_JUMP),
+                    Lists.newArrayList(Jump.Metric.CENTER_JUMP, Jump.Metric.CONTROL_POWER),
                     new Settings()
             ), cacheSize);
         }
@@ -168,7 +193,7 @@ public class ControllerOptimization extends Worker {
         Function<Robot<? extends Voxel>, ?> finalTask = (Function<Robot<? extends Voxel>, ?>) task;
         Problem<Robot<? extends Voxel>, Double> problem = () -> robot -> {
             List<Double> results = (List<Double>) finalTask.apply(robot);
-            return results.get(0);
+            return results.get(0)*(1.0+1.0/(results.get(1)*time*time));
         };
 
         Function<List<Double>, Robot<? extends Voxel>> mapper = g -> {
@@ -196,12 +221,12 @@ public class ControllerOptimization extends Worker {
                 CentralizedSensing centralizedBrain  = new CentralizedSensing<>(SerializationUtils.clone(sensingBody));
                 MultiLayerPerceptron mlp = new MultiLayerPerceptron(
                         MultiLayerPerceptron.ActivationFunction.TANH,
-                        centralizedBrain .nOfInputs(),
+                        centralizedBrain.nOfInputs(),
                         new int[]{(int) (centralizedBrain.nOfInputs() * 0.65d)}, // hidden layers
-                        centralizedBrain .nOfOutputs()
+                        centralizedBrain.nOfOutputs()
                 );
                 double[] ws = mlp.getParams();
-                IntStream.range(0, ws.length).forEach(i -> ws[i] = random.nextGaussian());
+                IntStream.range(0, ws.length).forEach(i -> ws[i] = g.get(i));
                 mlp.setParams(ws);
                 centralizedBrain.setFunction(mlp);
                 robot = new Robot<>(centralizedBrain, SerializationUtils.clone(sensingBody));
@@ -212,10 +237,26 @@ public class ControllerOptimization extends Worker {
         // CMA-ES evolver: https://en.wikipedia.org/wiki/CMA-ES
         Evolver<List<Double>, Robot<? extends Voxel>, Double> evolver = new CMAESEvolver<>(
                 mapper,
-                new FixedLengthListFactory<>(body.getW() * body.getH(), new UniformDoubleFactory(0, 1)),
+                new FixedLengthListFactory<>(genotypeSize, new UniformDoubleFactory(0, 1)),
                 PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness),
                 0,
                 1
+        );
+
+        // standard evolver
+        Evolver<List<Double>, Robot<? extends Voxel>, Double> directEvolver = new StandardEvolver<>(
+                mapper,
+                new FixedLengthListFactory<>(genotypeSize, new UniformDoubleFactory(0, 1)),
+                PartialComparator.from(Double.class).reversed().comparing(Individual::getFitness), // fitness comparator
+                1000, // pop size
+                Map.of(
+                        new GaussianMutation(0.01), 0.2d,
+                        new UniformCrossover<>(new FixedLengthListFactory<>(genotypeSize, new UniformDoubleFactory(0, 1))), 0.8d
+                ),
+                new Tournament(10), // depends on pop size
+                new Worst(), // worst individual dies
+                1000,
+                true
         );
 
         List<DataCollector<?, ? super Robot<? extends Voxel>, ? super Double>> collectors = List.of(
@@ -234,13 +275,23 @@ public class ControllerOptimization extends Worker {
             listener = statsListenerFactory.build(collectors.toArray(DataCollector[]::new));
         }
         try {
-            evolver.solve(
-                    Misc.cached(problem.getFitnessFunction(), cacheSize),
-                    new Births(births),
-                    new Random(randomSeed),
-                    executorService,
-                    listener
-            );
+            if (controller.equals("phase")) {
+                evolver.solve(
+                        Misc.cached(problem.getFitnessFunction(), cacheSize),
+                        new Births(births),
+                        new Random(randomSeed),
+                        executorService,
+                        listener
+                );
+            } else {
+                directEvolver.solve(
+                        Misc.cached(problem.getFitnessFunction(), cacheSize),
+                        new Iterations(200),
+                        new Random(randomSeed),
+                        executorService,
+                        listener
+                );
+            }
         } catch (InterruptedException e) {
             e.printStackTrace();
         } catch (ExecutionException e) {
