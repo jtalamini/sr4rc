@@ -101,7 +101,18 @@ public class ControllerOptimization extends Worker {
                     }
                 }
             }
-        } else if (bodyType.equals("box")) {
+        } else if (bodyType.equals("minimizecriticality")) {
+            List<String> bodies = Utils.minimizeCriticalityBodies;
+            body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
+            for (int x = 0; x < body.getW(); x++) {
+                for (int y = 0; y < body.getH(); y++) {
+                    if (body.get(x, y) != null) {
+                        body.set(x, y, new ControllableVoxel());
+                    }
+                }
+            }
+        }
+        else if (bodyType.equals("box")) {
             body = Grid.create(gridW, gridH, (x, y) -> SerializationUtils.clone(new ControllableVoxel()));
         } else if (bodyType.equals("worm")) {
             body = Grid.create(10, 2, (x, y) -> SerializationUtils.clone(new ControllableVoxel()));
@@ -193,7 +204,7 @@ public class ControllerOptimization extends Worker {
         Function<Robot<? extends Voxel>, ?> finalTask = (Function<Robot<? extends Voxel>, ?>) task;
         Problem<Robot<? extends Voxel>, Double> problem = () -> robot -> {
             List<Double> results = (List<Double>) finalTask.apply(robot);
-            return results.get(0)*(1.0+1.0/(results.get(1)*time*time));
+            return results.get(0)*(1.0/(1.0 + results.get(1)*time*time));
         };
 
         Function<List<Double>, Robot<? extends Voxel>> mapper = g -> {
@@ -222,6 +233,7 @@ public class ControllerOptimization extends Worker {
                 MultiLayerPerceptron mlp = new MultiLayerPerceptron(
                         MultiLayerPerceptron.ActivationFunction.TANH,
                         centralizedBrain.nOfInputs(),
+                        // 0.65d
                         new int[]{(int) (centralizedBrain.nOfInputs() * 0.65d)}, // hidden layers
                         centralizedBrain.nOfOutputs()
                 );
@@ -286,7 +298,7 @@ public class ControllerOptimization extends Worker {
             } else {
                 directEvolver.solve(
                         Misc.cached(problem.getFitnessFunction(), cacheSize),
-                        new Iterations(200),
+                        new Iterations(100),
                         new Random(randomSeed),
                         executorService,
                         listener

@@ -15,6 +15,11 @@ do
   do
     sbatch --array=0-9 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt brain.sh random $i $TASK 20 20 $CONTROLLER
   done
+  # minimize criticality robots
+  for i in {0..9}
+  do
+    sbatch --array=0-9 --nodes=1 -o logs/out.%A_%a.txt -e logs/err.%A_%a.txt brain.sh minimizecriticality $i $TASK 20 20 $CONTROLLER
+  done
   # pseudorandom robots
   for i in {0..9}
   do
