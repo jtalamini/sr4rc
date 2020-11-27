@@ -47,20 +47,6 @@ public class ControllerOptimization extends Worker {
     }
 
 
-    private static void printBody(Grid<ControllableVoxel> body) {
-        System.out.println("----BEGIN BODY----");
-        for (int y = 0; y < body.getH(); y++) {
-            for (int x = 0; x < body.getW(); x++) {
-                if (body.get(x, y) != null) {
-                    System.out.print("#");
-                } else {
-                    System.out.print(" ");
-                }
-            }
-            System.out.println();
-        }
-    }
-
     public static void main(String[] args) {
         new ControllerOptimization(args);
     }
@@ -77,32 +63,19 @@ public class ControllerOptimization extends Worker {
         int cacheSize = 10000;
         double time = 20;
         int births = i(a("births", "10000"));
-        String taskType = a("taskType", "locomotion");
+        String taskType = a("taskType", "jump");
 
-        Grid<ControllableVoxel> body;
+        Grid<ControllableVoxel> body = null;
 
+        List<String> bodies = null;
         if (bodyType.equals("pseudorandom")) {
-            List<String> bodies = Utils.pseudoRandomBodies;
-            body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
-            for (int x = 0; x < body.getW(); x++) {
-                for (int y = 0; y < body.getH(); y++) {
-                    if (body.get(x, y) != null) {
-                        body.set(x, y, new ControllableVoxel());
-                    }
-                }
-            }
+            bodies = Utils.pseudoRandomBodies;
         } else if (bodyType.equals("random")) {
-            List<String> bodies = Utils.randomBodies;
-            body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
-            for (int x = 0; x < body.getW(); x++) {
-                for (int y = 0; y < body.getH(); y++) {
-                    if (body.get(x, y) != null) {
-                        body.set(x, y, new ControllableVoxel());
-                    }
-                }
-            }
-        } else if (bodyType.equals("minimizecriticality")) {
-            List<String> bodies = Utils.minimizeCriticalityBodies;
+            bodies = Utils.randomBodies;
+        } else if (bodyType.equals("serliazied")) {
+            bodies = Utils.optimizedBodies;
+        }
+        if (bodies != null) {
             body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
             for (int x = 0; x < body.getW(); x++) {
                 for (int y = 0; y < body.getH(); y++) {
@@ -112,7 +85,8 @@ public class ControllerOptimization extends Worker {
                 }
             }
         }
-        else if (bodyType.equals("box")) {
+
+        if (bodyType.equals("box")) {
             body = Grid.create(gridW, gridH, (x, y) -> SerializationUtils.clone(new ControllableVoxel()));
         } else if (bodyType.equals("worm")) {
             body = Grid.create(10, 2, (x, y) -> SerializationUtils.clone(new ControllableVoxel()));
@@ -133,25 +107,15 @@ public class ControllerOptimization extends Worker {
                 }
             });
         }
-        else {
-            List<String> bodies = Utils.optimizedBodies;
-            body = it.units.erallab.Utils.safelyDeserialize(bodies.get(robotIndex), Grid.class);
-            for (int x = 0; x < body.getW(); x++) {
-                for (int y = 0; y < body.getH(); y++) {
-                    if (body.get(x, y) != null) {
-                        body.set(x, y, new ControllableVoxel());
-                    }
-                }
-            }
-        }
 
         int genotypeSize;
         if (controller.equals("phase")) {
             genotypeSize = body.getW() * body.getH();
         } else {
+            Grid<ControllableVoxel> finalBody = body;
             Grid<SensingVoxel> mlpBody = Grid.create(body.getW(), body.getH(), (x, y) -> {
                 SensingVoxel sensingVoxel = null;
-                if (body.get(x, y) != null) {
+                if (finalBody.get(x, y) != null) {
                     sensingVoxel = new SensingVoxel(List.of(
                             new Touch(),
                             new Normalization(new Velocity(true, 5d, Velocity.Axis.X, Velocity.Axis.Y)),
@@ -204,23 +168,25 @@ public class ControllerOptimization extends Worker {
         Function<Robot<? extends Voxel>, ?> finalTask = (Function<Robot<? extends Voxel>, ?>) task;
         Problem<Robot<? extends Voxel>, Double> problem = () -> robot -> {
             List<Double> results = (List<Double>) finalTask.apply(robot);
-            return results.get(0)*(1.0/(1.0 + results.get(1)*time*time));
+            //return results.get(0)*(1.0/(1.0 + results.get(1)*time*time));
+            return results.get(0);
         };
 
+        Grid<ControllableVoxel> finalBody1 = body;
         Function<List<Double>, Robot<? extends Voxel>> mapper = g -> {
             Controller<? extends Voxel> brain = null;
             Robot<? extends Voxel> robot = null;
             if (controller.equals("phase")) {
                 // each element of g becomes a phase
                 brain = new TimeFunctions(
-                        Grid.create(body.getW(), body.getH(), (x, y) -> (Double t) -> Math.sin(-2 * Math.PI * t + Math.PI * g.get(x + y * body.getW())))
+                        Grid.create(finalBody1.getW(), finalBody1.getH(), (x, y) -> (Double t) -> Math.sin(-2 * Math.PI * t + Math.PI * g.get(x + y * finalBody1.getW())))
                 );
-                robot = new Robot<>((Controller<? super ControllableVoxel>) brain, SerializationUtils.clone(body));
+                robot = new Robot<>((Controller<? super ControllableVoxel>) brain, SerializationUtils.clone(finalBody1));
             } else if (controller.equals("centralized")) {
                 // convert body to sensing body
-                Grid<SensingVoxel> sensingBody = Grid.create(body.getW(), body.getH(), (x, y) -> {
+                Grid<SensingVoxel> sensingBody = Grid.create(finalBody1.getW(), finalBody1.getH(), (x, y) -> {
                     SensingVoxel sensingVoxel = null;
-                    if (body.get(x, y) != null) {
+                    if (finalBody1.get(x, y) != null) {
                         sensingVoxel = new SensingVoxel(List.of(
                                 new Touch(),
                                 new Normalization(new Velocity(true, 5d, Velocity.Axis.X, Velocity.Axis.Y)),
